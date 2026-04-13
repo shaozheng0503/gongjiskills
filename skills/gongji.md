@@ -22,7 +22,7 @@ python3 gongji.py deploy my-registry/my-model:v1 --name my-inference --gpu 4090 
 python3 gongji.py deploy my-image:latest --name my-svc --gpu 4090 --port 8080,8443 --points 2
 
 # 带启动命令
-python3 gongji.py deploy my-image:latest --name my-svc --gpu 4090 --port 8080 --start-cmd "python" --start-args serve.py --host 0.0.0.0
+python3 gongji.py deploy my-image:latest --name my-svc --gpu 4090 --port 8080 --start-cmd "python" --start-args "serve.py --host 0.0.0.0"
 ```
 
 ### 查看任务列表

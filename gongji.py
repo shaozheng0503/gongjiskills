@@ -91,7 +91,7 @@ def cmd_deploy(client: GongjiClient, args):
     if args.start_cmd:
         create_kwargs["command"] = args.start_cmd
     if args.start_args:
-        create_kwargs["args"] = args.start_args
+        create_kwargs["args"] = args.start_args.split()
 
     print(f"正在创建任务 [{args.name}]...")
     res = client.create_task(**create_kwargs)
@@ -226,7 +226,7 @@ def main():
     p_deploy.add_argument("--points", type=int, default=1, help="节点数量 (默认 1)")
     p_deploy.add_argument("--env", default=None, help="环境变量")
     p_deploy.add_argument("--start-cmd", default=None, help="容器启动命令")
-    p_deploy.add_argument("--start-args", nargs="*", default=None, help="容器启动参数")
+    p_deploy.add_argument("--start-args", default=None, help="容器启动参数，多个用空格分隔（整体用引号包裹）")
     p_deploy.add_argument("--no-wait", action="store_true", help="不等待任务就绪")
 
     # list

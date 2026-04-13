@@ -1,93 +1,102 @@
 # 共绩算力 Skills
 
-让 AI Agent 自动调用 [共绩算力](https://www.gongjiyun.com) GPU 资源，一句话部署推理服务、拿到 API 地址、用完释放。
+让 AI Agent 自动调用 [共绩算力](https://www.gongjiyun.com) GPU 资源 — 一句话部署推理服务、拿到 API 地址、用完释放。
+
+> **相关文档：** [共绩算力官网](https://www.gongjiyun.com) | [Open API 使用文档](https://www.gongjiyun.com/docs/platform/openapi/zx3iwhbv1i8sxdkeiapcprxhn8d/) | [API 接口详情 (Apifox)](https://s.apifox.cn/6aa360d3-d8f2-471e-b841-3a35c33a7b7c)
+
+---
 
 ## 它解决什么问题
 
-Agent 开发中经常需要调用 GPU 算力（跑模型推理、图片生成等），但目前只能手动登录控制台操作，或者自己写 API 对接代码。
+Agent 开发中经常需要 GPU 算力（跑模型推理、图片生成等），但目前只能手动去[控制台](https://www.gongjiyun.com)操作，或者自己对着 [API 文档](https://www.gongjiyun.com/docs/platform/openapi/zx3iwhbv1i8sxdkeiapcprxhn8d/)写对接代码。
 
-这个 Skill 让 Agent **自动完成**：查资源 → 部署 → 拿到回调地址 → 用完释放。
-
-## 使用流程
-
-```
-1. 你在共绩算力平台准备好账号和余额
-2. 配置好 API 密钥
-3. Agent 需要 GPU 时，调用 Skill 自动部署
-4. 拿到服务地址（如 LLM API endpoint），直接调用
-5. 用完释放，按秒计费不浪费
-```
-
-**示意：**
+**这个 Skill 让 Agent 自动完成整个流程：**
 
 ```
 Agent: "我需要一个 4090 跑 vLLM 推理"
-  ↓ 调用 /gongji deploy
-  ↓ 自动查找有库存的 4090 → 创建任务 → 等待就绪
+  ↓ 自动查找有库存的 4090 → 创建部署 → 等待就绪
   ↓ 返回: https://xxx.suanli.cn:8080
-Agent: 拿到地址，开始调用推理 API
-  ↓ 推理完成
+Agent: 拿到地址，直接调用推理 API
+  ↓ 任务完成
 Agent: "用完了，释放"
-  ↓ 调用 /gongji stop
   ↓ 资源释放，停止计费
 ```
 
-## 前置准备
+---
 
-### 1. 注册共绩算力账号
+## 快速开始
 
-前往 [www.gongjiyun.com](https://www.gongjiyun.com) 注册账号，并**提前充值余额**（部署任务会按秒计费）。
+### 第一步：注册 & 充值
 
-### 2. 创建 API 密钥（RSA 模式）
+前往 [共绩算力官网](https://www.gongjiyun.com) 注册账号，**提前充值余额**（部署按秒计费，[查看定价](https://www.gongjiyun.com/pricing/)）。
 
-登录控制台 → 右上角头像 → **API 密钥** → 新建密钥 → 选择 **RSA 加验签模式**。
+### 第二步：创建 API 密钥
 
-### 3. 生成 RSA 密钥对
+登录[控制台](https://www.gongjiyun.com) → 右上角头像 → **API 密钥** → 新建密钥 → 选择 **RSA 加验签模式**。
+
+> 密钥创建详细说明见 [Open API 使用文档](https://www.gongjiyun.com/docs/platform/openapi/zx3iwhbv1i8sxdkeiapcprxhn8d/)，RSA 签名机制说明见 [RSA 模式使用指南](https://www.gongjiyun.com/docs/platform/openapi/m3p6whioxidzwaksughc4gfhnro/)。
+
+### 第三步：生成 RSA 密钥对 & 配置
 
 ```bash
+# 生成密钥
 mkdir -p ~/.gongji
 openssl genrsa -out ~/.gongji/private.key 2048
 openssl rsa -pubout -in ~/.gongji/private.key -out ~/.gongji/public.pem
-```
 
-将 `public.pem` 的内容粘贴到控制台的公钥输入框，保存后会得到一个 **API Token**。
+# 将 public.pem 的内容粘贴到控制台公钥输入框，保存后拿到 API Token
 
-### 4. 创建配置文件
-
-```bash
+# 写入配置（替换 your-api-token）
 cat > ~/.gongji/config.json << 'EOF'
 {
-  "token": "你的API Token",
+  "token": "your-api-token",
   "private_key_path": "~/.gongji/private.key"
 }
 EOF
 ```
 
-### 5. 安装依赖
+### 第四步：安装 & 运行
 
 ```bash
-pip install cryptography requests
+git clone https://github.com/shaozheng0503/gongjiskills.git
+cd gongjiskills
+pip install -r requirements.txt
+
+# 测试是否配置成功
+python3 gongji.py list
 ```
+
+---
 
 ## CLI 用法
 
-### 部署任务
+### `deploy` — 部署任务
+
+自动查找有库存的 GPU → 创建弹性部署 → 等待就绪 → 返回访问地址。
 
 ```bash
-# 部署镜像到 4090，暴露 8080 端口
-python3 gongji.py deploy my-registry/vllm-server:latest \
-  -n my-llm \
-  -g 4090 \
-  -p 8080
-
-# 部署完成后输出:
-# 选中资源: RTX 4090 ×1 | 区域A | ¥1.68/h
-# 任务已创建, task_id=388
-# 等待任务启动... Running!
-# 访问地址: https://xxx.suanli.cn:8080 (端口 8080)
+python3 gongji.py deploy <镜像地址> -n <任务名> -g <GPU型号> -p <端口>
 ```
 
-拿到访问地址后，Agent 就可以直接调用，比如：
+**示例：**
+
+```bash
+# 部署一个 vLLM 推理服务到 4090
+python3 gongji.py deploy my-registry/vllm-server:latest -n my-llm -g 4090 -p 8080
+```
+
+**输出：**
+
+```
+正在查询可用 GPU 资源...
+选中资源: RTX 4090 x1 | 区域A | 1.68/h
+正在创建任务 [my-llm]...
+任务已创建, task_id=388
+等待任务启动........ Running!
+访问地址: https://xxx.suanli.cn:8080 (端口 8080)
+```
+
+拿到地址后直接调用：
 
 ```bash
 curl https://xxx.suanli.cn:8080/v1/chat/completions \
@@ -95,23 +104,86 @@ curl https://xxx.suanli.cn:8080/v1/chat/completions \
   -d '{"model": "my-model", "messages": [{"role": "user", "content": "hello"}]}'
 ```
 
-### 查看任务
+**全部参数：**
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `<image>` | Docker 镜像地址（必填） | - |
+| `-n, --name` | 任务名称（必填） | - |
+| `-g, --gpu` | GPU 型号关键词，如 `4090` / `H800` | 自动选择 |
+| `-p, --port` | 暴露端口，多个用逗号分隔 | `8080` |
+| `--points` | 节点数量 | `1` |
+| `--env` | 环境变量 | - |
+| `--start-cmd` | 容器启动命令 | - |
+| `--start-args` | 启动参数（引号包裹） | - |
+| `--no-wait` | 不等待就绪，立即返回 task_id | - |
+
+**更多示例：**
 
 ```bash
-python3 gongji.py list                    # 列出所有运行中的任务
-python3 gongji.py status 388              # 查看任务详情和访问地址
-python3 gongji.py status 388 --json       # 输出完整 JSON
+# 多端口 + 2 节点
+python3 gongji.py deploy my-image:latest -n my-svc -g 4090 -p 8080,8443 --points 2
+
+# 带启动命令
+python3 gongji.py deploy my-image:latest -n my-svc -g 4090 -p 8080 \
+  --start-cmd "python" --start-args "serve.py --host 0.0.0.0"
+
+# 不等待，后台部署
+python3 gongji.py deploy my-image:latest -n my-svc -g 4090 --no-wait
 ```
 
-### 停止任务
+### `list` — 查看任务列表
 
 ```bash
-python3 gongji.py stop 388                # 删除任务（释放资源，不可恢复）
+python3 gongji.py list                    # 运行中 + 待启动 + 已暂停
+python3 gongji.py list -s Running         # 只看运行中的
+python3 gongji.py list -s End             # 查看已结束的
+```
+
+**输出：**
+
+```
+ID       名称                 状态       节点   GPU
+----------------------------------------------------------------------
+388      my-llm               Running    1      RTX 4090 x1
+392      sd-server             Pending    2      RTX 4090 x2
+```
+
+### `status` — 查看任务详情
+
+```bash
+python3 gongji.py status 388              # 查看状态和访问地址
+python3 gongji.py status 388 --json       # 输出完整 JSON（调试用）
+```
+
+**输出：**
+
+```
+任务ID:   388
+名称:     my-llm
+状态:     Running
+节点数:   1 / 1
+GPU:      RTX 4090 x1
+内存:     32768 MB | CPU: 8 核
+访问地址: https://xxx.suanli.cn:8080 (端口 8080)
+```
+
+### `stop` — 停止 / 暂停 / 恢复任务
+
+```bash
+python3 gongji.py stop 388                # 删除（释放资源，不可恢复，需确认）
+python3 gongji.py stop 388 -f             # 强制删除，跳过确认
 python3 gongji.py stop 388 --pause        # 暂停（释放资源，可恢复）
 python3 gongji.py stop 388 --resume       # 恢复暂停的任务
 ```
 
-## 在 Agent 中使用（Python API）
+> `--pause` 和 `--resume` 互斥，不能同时使用。删除操作不可恢复，请确认后再执行。
+
+---
+
+## 在 Agent 代码中使用（Python API）
+
+除了 CLI，也可以在 Python 代码中直接调用：
 
 ```python
 from core.client import GongjiClient
@@ -135,41 +207,51 @@ detail = client.task_detail(task_id)
 url = detail["data"]["services"][0]["remote_ports"][0]["url"]
 # url = "https://xxx.suanli.cn:8080"
 
-# 4. 调用推理 API
+# 4. 调用你的推理 API
 # requests.post(f"{url}/v1/chat/completions", json={...})
 
 # 5. 用完释放
 client.stop_task(task_id)
 ```
 
+完整 API 参考见 [Apifox 接口文档](https://s.apifox.cn/6aa360d3-d8f2-471e-b841-3a35c33a7b7c)。
+
+---
+
 ## 在 Claude Code 中使用
 
-本项目包含 Claude Code Skill 定义（`skills/gongji.md`），配置后可以直接对 Agent 说：
+本项目包含 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) Skill 定义（`skills/gongji.md`），配置后直接对 Agent 说：
 
 - "帮我部署一个 4090 跑推理，镜像是 xxx，开 8080 端口"
 - "看看我有哪些任务在跑"
 - "把任务 388 停掉"
 
-Agent 会自动调用对应的 CLI 命令完成操作。
+Agent 会自动调用 CLI 完成操作并返回结果。
+
+---
 
 ## 项目结构
 
 ```
-├── README.md
-├── CLAUDE.md            # Claude Code 项目说明
-├── gongji.py            # CLI 入口（deploy/list/status/stop）
+gongjiskills/
+├── gongji.py            # CLI 入口（deploy / list / status / stop）
 ├── core/
 │   ├── auth.py          # RSA-SHA256 签名 + 配置加载
 │   └── client.py        # 共绩算力 API 客户端
-└── skills/
-    └── gongji.md        # Claude Code Skill 定义
+├── skills/
+│   └── gongji.md        # Claude Code Skill 定义
+├── requirements.txt
+├── CLAUDE.md
+└── README.md
 ```
 
 ## 支持的 API
 
+基于[共绩算力 Open API](https://www.gongjiyun.com/docs/platform/openapi/zx3iwhbv1i8sxdkeiapcprxhn8d/) 封装，已对接以下接口（[完整接口文档](https://s.apifox.cn/6aa360d3-d8f2-471e-b841-3a35c33a7b7c)）：
+
 | 模块 | 接口 | 说明 |
 |------|------|------|
-| 资源 | `GET /api/deployment/resource/search` | 查询 GPU 设备/库存/价格 |
+| 资源 | `GET /api/deployment/resource/search` | 查询 GPU 设备 / 库存 / 价格 |
 | 任务 | `POST /api/deployment/task/create` | 创建弹性部署任务 |
 | | `GET /api/deployment/task/search` | 查询任务列表 |
 | | `GET /api/deployment/task/detail` | 获取任务详情 |
@@ -186,8 +268,16 @@ Agent 会自动调用对应的 CLI 命令完成操作。
 | | `GET /api/billing/get_task_billing_record` | 任务账单 |
 | 存储 | `GET /api/storage/get_storage` | 存储资源列表 |
 
-## 相关链接
+## 常见问题
 
-- [共绩算力官网](https://www.gongjiyun.com)
-- [Open API 文档](https://www.gongjiyun.com/docs/platform/openapi/zx3iwhbv1i8sxdkeiapcprxhn8d/)
-- [API 接口详情 (Apifox)](https://s.apifox.cn/6aa360d3-d8f2-471e-b841-3a35c33a7b7c)
+**Q: 配置报错 "配置文件不存在"**
+A: 按[快速开始](#第三步生成-rsa-密钥对--配置)创建 `~/.gongji/config.json`。
+
+**Q: 报错 "token expired"**
+A: Token 已过期，登录[控制台](https://www.gongjiyun.com)重新生成 API 密钥。
+
+**Q: 部署后拿不到访问地址**
+A: 任务可能还在启动中，用 `python3 gongji.py status <task_id>` 查看状态。状态为 `Running` 后才有访问地址。
+
+**Q: 如何查看支出费用**
+A: 登录[控制台](https://www.gongjiyun.com)查看账单，或使用 Python API 调用 `client` 的账单接口。
