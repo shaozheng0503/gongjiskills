@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""共绩算力 CLI — deploy / list / status / stop"""
+"""共绩算力 CLI — init / resources / deploy / list / status / stop"""
 
 import argparse
 import json
+import os
+import subprocess
 import sys
 import time
+from pathlib import Path
 
 from core.client import GongjiClient
 
@@ -19,6 +22,121 @@ def _fail(msg: str):
     print(f"错误: {msg}", file=sys.stderr)
     sys.exit(1)
 
+
+# ── init ──
+
+def cmd_init(args):
+    """引导首次配置：生成密钥 → 写配置 → 验证连通性"""
+    gongji_dir = Path.home() / ".gongji"
+    config_path = gongji_dir / "config.json"
+    key_path = gongji_dir / "private.key"
+    pub_path = gongji_dir / "public.pem"
+
+    print("=== 共绩算力 CLI 初始化 ===\n")
+
+    # 1. 创建目录
+    gongji_dir.mkdir(exist_ok=True)
+
+    # 2. 生成密钥
+    if key_path.exists() and not args.force:
+        print(f"私钥已存在: {key_path}（跳过生成，用 --force 覆盖）")
+    else:
+        print("生成 RSA 密钥对...")
+        subprocess.run(
+            ["openssl", "genrsa", "-out", str(key_path), "2048"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["openssl", "rsa", "-pubout", "-in", str(key_path), "-out", str(pub_path)],
+            check=True, capture_output=True,
+        )
+        os.chmod(str(key_path), 0o600)
+        print(f"  私钥: {key_path}")
+        print(f"  公钥: {pub_path}")
+
+    # 3. 显示公钥
+    if pub_path.exists():
+        print(f"\n请将以下公钥内容粘贴到共绩算力控制台（API密钥 → RSA模式）：")
+        print("-" * 50)
+        print(pub_path.read_text())
+        print("-" * 50)
+
+    # 4. 输入 Token
+    if config_path.exists() and not args.force:
+        print(f"\n配置文件已存在: {config_path}（跳过，用 --force 覆盖）")
+        existing = json.loads(config_path.read_text())
+        token = existing.get("token", "")
+    else:
+        print("\n登录 https://www.gongjiyun.com → 右上角头像 → API密钥")
+        print("新建密钥（RSA模式），上传公钥后获取 Token\n")
+        token = input("请输入 API Token: ").strip()
+        if not token:
+            _fail("Token 不能为空")
+
+        config = {
+            "token": token,
+            "private_key_path": str(key_path),
+        }
+        config_path.write_text(json.dumps(config, indent=2, ensure_ascii=False))
+        print(f"配置已写入: {config_path}")
+
+    # 5. 验证连通性
+    print("\n验证 API 连通性...")
+    try:
+        client = GongjiClient()
+        res = client.search_resources()
+        if _ok(res):
+            count = res.get("data", {}).get("count", 0)
+            print(f"连接成功! 当前有 {count} 种 GPU 资源可用")
+        else:
+            msg = res.get("message", "")
+            print(f"API 返回: {msg}")
+            if "token" in msg.lower():
+                print("Token 可能无效，请检查后重新运行 init --force")
+    except Exception as e:
+        print(f"连接失败: {e}")
+        print("请检查网络或 Token 配置")
+
+    print("\n初始化完成!")
+
+
+# ── resources ──
+
+def cmd_resources(client: GongjiClient, args):
+    """查看可用 GPU 资源"""
+    res = client.search_resources()
+    if not _ok(res):
+        _fail(f"查询失败: {res.get('message', res)}")
+
+    results = res.get("data", {}).get("results", [])
+    if not results:
+        print("当前无可用 GPU 资源")
+        return
+
+    for device in results:
+        gpu = device.get("gpu_name", "?")
+        gpu_count = device.get("gpu_count", "?")
+        gpu_mem = device.get("gpu_memory", 0)
+        cpu = device.get("cpu_cores", 0)
+        mem = device.get("memory", 0)
+
+        print(f"\n{gpu} x{gpu_count}  (显存 {gpu_mem}G | {cpu}核 | {mem // 1024}G 内存)")
+        print(f"  {'区域':<12} {'库存':<6} {'原价':<10} {'折扣价':<10}")
+        print(f"  {'-'*42}")
+
+        for r in device.get("regions", []):
+            region_name = r.get("region_name", "?")
+            inventory = r.get("inventory", 0)
+            price = r.get("price") or "-"
+            discount = r.get("discount_price") or "-"
+            stock_mark = "" if inventory > 0 else " (售罄)"
+            print(f"  {region_name:<12} {inventory:<6} {price:<10} {discount:<10}{stock_mark}")
+
+    count = res.get("data", {}).get("count", 0)
+    print(f"\n共 {count} 种规格")
+
+
+# ── deploy ──
 
 def cmd_deploy(client: GongjiClient, args):
     """查资源 → 创建任务 → 等待就绪 → 返回URL"""
@@ -57,7 +175,7 @@ def cmd_deploy(client: GongjiClient, args):
     if not matched or not matched_region:
         gpu_hint = f" ({args.gpu})" if args.gpu else ""
         print(f"未找到有库存的 GPU 资源{gpu_hint}", file=sys.stderr)
-        print("当前可用资源:")
+        print("当前可用资源（用 resources 命令查看详情）:")
         for d in results:
             for r in d.get("regions", []):
                 if r.get("inventory", 0) > 0:
@@ -101,12 +219,23 @@ def cmd_deploy(client: GongjiClient, args):
     task_id = res["data"]["task_id"]
     print(f"任务已创建, task_id={task_id}")
 
-    # 5. 等待就绪
+    # 5. 等待就绪（轮询容错：网络抖动不终止）
     if not args.no_wait:
         print("等待任务启动", end="", flush=True)
+        retries = 0
         for _ in range(60):
             time.sleep(5)
-            detail = client.task_detail(task_id)
+            try:
+                detail = client.task_detail(task_id)
+                retries = 0  # 成功则重置
+            except Exception:
+                retries += 1
+                if retries >= 3:
+                    print()
+                    _fail(f"连续 {retries} 次查询失败，请手动查询: python3 gongji.py status {task_id}")
+                print("!", end="", flush=True)
+                continue
+
             data = detail.get("data") or {}
             status = data.get("status", "")
             if status == "Running":
@@ -123,6 +252,8 @@ def cmd_deploy(client: GongjiClient, args):
     print(json.dumps({"task_id": task_id}, ensure_ascii=False))
 
 
+# ── list ──
+
 def cmd_list(client: GongjiClient, args):
     """列出当前任务"""
     status = args.status if args.status else "Running,Pending,Paused"
@@ -135,16 +266,32 @@ def cmd_list(client: GongjiClient, args):
         print("当前没有任务")
         return
 
-    print(f"{'ID':<8} {'名称':<20} {'状态':<10} {'节点':<6} {'GPU':<20}")
-    print("-" * 70)
     for t in tasks:
+        task_id = t.get("task_id", "?")
+        name = t.get("task_name", "")
+        status = t.get("status", "")
+        running = t.get("runing_points", 0)
+        total = t.get("points") or running
+
         gpu_info = ""
         resources = t.get("resources", [])
         if resources:
             r = resources[0].get("resource", {})
             gpu_info = f"{r.get('gpu_name', '')} x{r.get('gpu_count', '')}"
-        print(f"{t.get('task_id', ''):<8} {t.get('task_name', ''):<20} {t.get('status', ''):<10} {t.get('runing_points', 0):<6} {gpu_info:<20}")
 
+        urls = []
+        for svc in t.get("services", []):
+            for port in svc.get("remote_ports", []):
+                url = port.get("url")
+                if url:
+                    urls.append(f"{url} (:{port.get('service_port')})")
+
+        print(f"[{task_id}] {name}  {status}  节点 {running}/{total}  {gpu_info}")
+        for url in urls:
+            print(f"  -> {url}")
+
+
+# ── status ──
 
 def cmd_status(client: GongjiClient, args):
     """查看任务详情和访问URL"""
@@ -174,6 +321,8 @@ def cmd_status(client: GongjiClient, args):
         print(json.dumps(data, indent=2, ensure_ascii=False))
 
 
+# ── stop ──
+
 def cmd_stop(client: GongjiClient, args):
     """停止/暂停/恢复任务"""
     if args.action == "pause":
@@ -200,6 +349,8 @@ def cmd_stop(client: GongjiClient, args):
     print(f"任务 {args.task_id} 已{action}")
 
 
+# ── 工具 ──
+
 def _print_task_urls(data: dict):
     """打印任务的访问URL"""
     services = data.get("services", [])
@@ -210,12 +361,21 @@ def _print_task_urls(data: dict):
                 print(f"访问地址: {url} (端口 {port.get('service_port')})")
 
 
+# ── main ──
+
 def main():
     parser = argparse.ArgumentParser(
         description="共绩算力 CLI — 弹性部署 GPU 任务",
         epilog="文档: https://github.com/shaozheng0503/gongjiskills",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
+
+    # init
+    p_init = sub.add_parser("init", help="初始化配置（生成密钥、写入Token）")
+    p_init.add_argument("--force", "-f", action="store_true", help="覆盖已有配置")
+
+    # resources
+    sub.add_parser("resources", help="查看可用 GPU 资源和价格")
 
     # deploy
     p_deploy = sub.add_parser("deploy", help="创建弹性部署任务")
@@ -248,12 +408,18 @@ def main():
 
     args = parser.parse_args()
 
+    # init 不需要已有配置
+    if args.cmd == "init":
+        cmd_init(args)
+        return
+
     try:
         client = GongjiClient()
     except (FileNotFoundError, KeyError, ValueError) as e:
-        _fail(str(e))
+        _fail(f"{e}\n\n提示: 运行 python3 gongji.py init 进行初始化配置")
 
     commands = {
+        "resources": cmd_resources,
         "deploy": cmd_deploy,
         "list": cmd_list,
         "status": cmd_status,

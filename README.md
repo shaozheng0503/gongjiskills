@@ -30,45 +30,62 @@ Agent: "用完了，释放"
 
 前往 [共绩算力官网](https://www.gongjiyun.com) 注册账号，**提前充值余额**（部署按秒计费，[查看定价](https://www.gongjiyun.com/pricing/)）。
 
-### 第二步：创建 API 密钥
-
-登录[控制台](https://www.gongjiyun.com) → 右上角头像 → **API 密钥** → 新建密钥 → 选择 **RSA 加验签模式**。
-
-> 密钥创建详细说明见 [Open API 使用文档](https://www.gongjiyun.com/docs/platform/openapi/zx3iwhbv1i8sxdkeiapcprxhn8d/)，RSA 签名机制说明见 [RSA 模式使用指南](https://www.gongjiyun.com/docs/platform/openapi/m3p6whioxidzwaksughc4gfhnro/)。
-
-### 第三步：生成 RSA 密钥对 & 配置
-
-```bash
-# 生成密钥
-mkdir -p ~/.gongji
-openssl genrsa -out ~/.gongji/private.key 2048
-openssl rsa -pubout -in ~/.gongji/private.key -out ~/.gongji/public.pem
-
-# 将 public.pem 的内容粘贴到控制台公钥输入框，保存后拿到 API Token
-
-# 写入配置（替换 your-api-token）
-cat > ~/.gongji/config.json << 'EOF'
-{
-  "token": "your-api-token",
-  "private_key_path": "~/.gongji/private.key"
-}
-EOF
-```
-
-### 第四步：安装 & 运行
+### 第二步：安装
 
 ```bash
 git clone https://github.com/shaozheng0503/gongjiskills.git
 cd gongjiskills
 pip install -r requirements.txt
+```
 
-# 测试是否配置成功
-python3 gongji.py list
+### 第三步：初始化配置
+
+```bash
+python3 gongji.py init
+```
+
+`init` 会自动完成：
+1. 生成 RSA 密钥对
+2. 显示公钥内容 → 你粘贴到[控制台](https://www.gongjiyun.com)（头像 → API密钥 → RSA模式）
+3. 输入获取到的 API Token
+4. 验证连通性
+
+> 也可以手动配置，见 [Open API 使用文档](https://www.gongjiyun.com/docs/platform/openapi/zx3iwhbv1i8sxdkeiapcprxhn8d/) 和 [RSA 模式使用指南](https://www.gongjiyun.com/docs/platform/openapi/m3p6whioxidzwaksughc4gfhnro/)。
+
+### 第四步：验证
+
+```bash
+python3 gongji.py resources    # 查看可用GPU和价格
 ```
 
 ---
 
 ## CLI 用法
+
+### `resources` — 查看可用 GPU
+
+部署前先看看有什么资源、什么价格：
+
+```bash
+python3 gongji.py resources
+```
+
+**输出：**
+
+```
+RTX 4090 x1  (显存 24G | 8核 | 32G 内存)
+  区域           库存   原价       折扣价
+  ------------------------------------------
+  华东A          12     1.98       1.68
+  华北B          3      1.98       1.68
+
+H800 x8  (显存 640G | 128核 | 1024G 内存)
+  区域           库存   原价       折扣价
+  ------------------------------------------
+  华东A          1      88.00      78.00
+
+共 5 种规格
+```
 
 ### `deploy` — 部署任务
 
@@ -140,13 +157,12 @@ python3 gongji.py list -s Running         # 只看运行中的
 python3 gongji.py list -s End             # 查看已结束的
 ```
 
-**输出：**
+**输出（含访问地址）：**
 
 ```
-ID       名称                 状态       节点   GPU
-----------------------------------------------------------------------
-388      my-llm               Running    1      RTX 4090 x1
-392      sd-server             Pending    2      RTX 4090 x2
+[388] my-llm  Running  节点 1/1  RTX 4090 x1
+  -> https://xxx.suanli.cn:8080 (:8080)
+[392] sd-server  Pending  节点 0/2  RTX 4090 x2
 ```
 
 ### `status` — 查看任务详情

@@ -4,94 +4,76 @@
 
 TRIGGER: 用户提到"部署"、"发布任务"、"GPU"、"算力"、"共绩"、"弹性部署"、"跑模型"、"推理服务"，或需要创建/管理 GPU 计算任务时触发。
 
-## 使用方式
+## 命令速查
 
-通过项目根目录下的 `gongji.py` 执行操作：
-
-### 部署任务
 ```bash
-python3 gongji.py deploy <镜像地址> --name <任务名> --gpu <GPU型号> --port <端口>
+python3 gongji.py init                    # 首次配置（生成密钥、输入Token）
+python3 gongji.py resources               # 查看可用GPU和价格
+python3 gongji.py deploy <image> -n <name> -g <gpu> -p <port>   # 部署
+python3 gongji.py list                    # 列出任务（含访问地址）
+python3 gongji.py status <task_id>        # 任务详情
+python3 gongji.py stop <task_id>          # 删除任务
 ```
 
-示例:
+## 典型工作流
+
+### 首次使用
 ```bash
-# 部署一个推理服务到4090
-python3 gongji.py deploy my-registry/my-model:v1 --name my-inference --gpu 4090 --port 8080
-
-# 多端口 + 2节点
-python3 gongji.py deploy my-image:latest --name my-svc --gpu 4090 --port 8080,8443 --points 2
-
-# 带启动命令
-python3 gongji.py deploy my-image:latest --name my-svc --gpu 4090 --port 8080 --start-cmd "python" --start-args "serve.py --host 0.0.0.0"
+python3 gongji.py init
+# 按提示：生成密钥 → 上传公钥到控制台 → 输入Token → 验证连通
 ```
 
-### 查看任务列表
+### Agent 需要GPU时
 ```bash
-python3 gongji.py list
-python3 gongji.py list --status Running
+# 1. 查看可用资源（可选）
+python3 gongji.py resources
+
+# 2. 部署（自动查资源→创建→等Running→返回URL）
+python3 gongji.py deploy my-registry/vllm:latest -n my-llm -g 4090 -p 8080
+
+# 3. 拿到访问地址后直接调用
+# 输出: 访问地址: https://xxx.suanli.cn:8080 (端口 8080)
+
+# 4. 用完释放
+python3 gongji.py stop <task_id> --force
 ```
 
-### 查看任务状态和访问URL
+### deploy 全部参数
 ```bash
-python3 gongji.py status <task_id>
-python3 gongji.py status <task_id> --json  # 完整详情
+python3 gongji.py deploy <image> \
+  -n <name>             # 任务名（必填）
+  -g <gpu>              # GPU型号: 4090/H800（可选，默认自动选）
+  -p <port>             # 端口，多个逗号分隔（默认8080）
+  --points <N>          # 节点数（默认1）
+  --env <env>           # 环境变量
+  --start-cmd <cmd>     # 启动命令
+  --start-args "<args>" # 启动参数（引号包裹）
+  --no-wait             # 不等待就绪
 ```
 
-### 停止/暂停/恢复任务
+### stop 操作
 ```bash
-python3 gongji.py stop <task_id>            # 删除（不可恢复，需确认）
-python3 gongji.py stop <task_id> --force    # 强制删除
-python3 gongji.py stop <task_id> --pause    # 暂停（释放资源，可恢复）
-python3 gongji.py stop <task_id> --resume   # 恢复暂停的任务
+python3 gongji.py stop <id>            # 删除（需确认）
+python3 gongji.py stop <id> -f         # 强制删除
+python3 gongji.py stop <id> --pause    # 暂停（可恢复）
+python3 gongji.py stop <id> --resume   # 恢复
 ```
-
-## 工作流程
-
-当 Agent 需要 GPU 算力时:
-
-1. 先用 `deploy` 创建任务，会自动查找有库存的 GPU 资源并部署
-2. 部署完成后返回访问 URL，Agent 可直接调用该 URL 进行推理
-3. 用完后用 `stop` 释放资源，避免持续计费
 
 ## 前置条件
 
-需要 `~/.gongji/config.json` 配置文件:
-```json
-{
-  "token": "your-api-token",
-  "private_key_path": "~/.gongji/private.key"
-}
-```
+如果配置不存在，引导用户运行 `python3 gongji.py init`，或手动配置：
+1. 登录 https://www.gongjiyun.com → 头像 → API 密钥 → RSA 模式
+2. `openssl genrsa -out ~/.gongji/private.key 2048`
+3. `openssl rsa -pubout -in ~/.gongji/private.key -out public.pem`，上传公钥
+4. 创建 `~/.gongji/config.json`：`{"token": "xxx", "private_key_path": "~/.gongji/private.key"}`
 
-如果配置不存在，引导用户:
-1. 登录 https://www.gongjiyun.com 控制台
-2. 右上角头像 → API 密钥 → 新建密钥（RSA 加验签模式）
-3. 生成 RSA 密钥对: `openssl genrsa -out ~/.gongji/private.key 2048`
-4. 导出公钥上传: `openssl rsa -pubout -in ~/.gongji/private.key -out public.pem`
-5. 创建配置文件 `~/.gongji/config.json`
+## Python API
 
-## Python API 调用
-
-也可以在代码中直接使用:
 ```python
 from core.client import GongjiClient
-
 client = GongjiClient()
-
-# 查资源
 resources = client.search_resources()
-
-# 创建任务
-result = client.create_task(
-    task_name="my-task",
-    mark="resource-mark-from-search",
-    service_image="my-image:v1",
-    ports=[8080],
-)
-
-# 查状态
+result = client.create_task(task_name="x", mark="...", service_image="img:v1", ports=[8080])
 detail = client.task_detail(task_id=388)
-
-# 停止
 client.stop_task(task_id=388)
 ```
