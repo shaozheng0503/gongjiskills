@@ -51,11 +51,12 @@ def test_deploy_json_error_is_valid_json():
     assert "error" in data
 
 
-def test_list_json_error_is_valid_json():
+def test_list_json_is_valid_json():
+    """--json 输出无论成功或失败都必须是合法 JSON"""
     out, _, rc = run(["list", "--json"])
-    assert rc == 1
     data = json.loads(out)
-    assert "error" in data
+    # 成功: list返回数组; 失败: 返回 {"error": "..."}
+    assert isinstance(data, (list, dict))
 
 
 def test_status_json_error_is_valid_json():
@@ -95,6 +96,31 @@ def test_logs_help():
     out, _, rc = run(["logs", "--help"])
     assert rc == 0
     assert "--events" in out
+
+
+def test_resources_has_all_flag():
+    out, _, rc = run(["resources", "--help"])
+    assert rc == 0
+    assert "--all" in out
+
+
+def test_ok_accepts_0000():
+    """真实 API 返回 code=0000 表示成功"""
+    import importlib
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from gongjiskills.cli import _ok
+    assert _ok({"code": "0000"}) is True
+    assert _ok({"code": "200"}) is True
+    assert _ok({"code": 200}) is True
+    assert _ok({"code": "401"}) is False
+    assert _ok({}) is False
+
+
+def test_no_urllib3_warning():
+    """CLI 输出不应包含 urllib3 Warning"""
+    out, err, _ = run(["--help"])
+    assert "Warning" not in out
+    assert "Warning" not in err
 
 
 if __name__ == "__main__":

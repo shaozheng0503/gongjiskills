@@ -7,7 +7,10 @@ import os
 import subprocess
 import sys
 import time
+import warnings
 from pathlib import Path
+
+warnings.filterwarnings("ignore")
 
 from .client import GongjiClient
 
@@ -142,6 +145,9 @@ def cmd_resources(client: GongjiClient, args):
     if args.json:
         _json_out(results)
 
+    show_all = args.all
+    shown = 0
+
     for device in results:
         gpu = device.get("gpu_name", "?")
         gpu_count = device.get("gpu_count", "?")
@@ -149,11 +155,19 @@ def cmd_resources(client: GongjiClient, args):
         cpu = device.get("cpu_cores", 0)
         mem = _fmt_mem(device.get("memory", 0))
 
+        # 过滤：默认只显示有库存的区域
+        regions = device.get("regions", [])
+        if not show_all:
+            regions = [r for r in regions if r.get("inventory", 0) > 0]
+        if not regions:
+            continue
+
+        shown += 1
         print(f"\n{gpu} x{gpu_count}  (显存 {gpu_mem}G | {cpu}核 | {mem}G)")
         print(f"  {'区域':<12} {'库存':<6} {'单价(元/h)':<12} {'折扣价(元/h)':<12}")
         print(f"  {'-'*46}")
 
-        for r in device.get("regions", []):
+        for r in regions:
             region_name = r.get("region_name", "?")
             inventory = r.get("inventory", 0)
             price = _fmt_price(r.get("price"))
@@ -161,8 +175,11 @@ def cmd_resources(client: GongjiClient, args):
             stock_mark = "" if inventory > 0 else " (售罄)"
             print(f"  {region_name:<12} {inventory:<6} {price:<12} {discount:<12}{stock_mark}")
 
-    count = res.get("data", {}).get("count", 0)
-    print(f"\n共 {count} 种规格")
+    total = res.get("data", {}).get("count", 0)
+    if show_all:
+        print(f"\n共 {total} 种规格")
+    else:
+        print(f"\n有库存 {shown} 种（共 {total} 种，用 --all 查看全部）")
 
 
 # ── deploy ──
@@ -514,6 +531,7 @@ def main():
 
     # resources
     p_res = sub.add_parser("resources", help="查看可用 GPU 资源和价格")
+    p_res.add_argument("--all", "-a", action="store_true", help="显示全部（含售罄）")
     p_res.add_argument("--json", "-j", action="store_true", help="JSON格式输出")
 
     # deploy
