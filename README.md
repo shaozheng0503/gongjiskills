@@ -106,7 +106,7 @@ python3 gongji.py deploy my-registry/vllm-server:latest -n my-llm -g 4090 -p 808
 
 ```
 正在查询可用 GPU 资源...
-选中资源: RTX 4090 x1 | 区域A | 1.68/h
+选中资源: RTX 4090 x1 | 区域A | 1.68/h (最低价)
 正在创建任务 [my-llm]...
 任务已创建, task_id=388
 等待任务启动........ Running!
@@ -134,6 +134,7 @@ curl https://xxx.suanli.cn:8080/v1/chat/completions \
 | `--start-cmd` | 容器启动命令 | - |
 | `--start-args` | 启动参数（引号包裹） | - |
 | `--no-wait` | 不等待就绪，立即返回 task_id | - |
+| `--json` | JSON 格式输出（供 Agent 解析） | - |
 
 **更多示例：**
 
@@ -194,6 +195,40 @@ python3 gongji.py stop 388 --resume       # 恢复暂停的任务
 ```
 
 > `--pause` 和 `--resume` 互斥，不能同时使用。删除操作不可恢复，请确认后再执行。
+
+### `logs` — 查看节点日志
+
+部署失败或运行异常时，用 logs 排查原因：
+
+```bash
+python3 gongji.py logs 388                # 查看容器日志
+python3 gongji.py logs 388 --events       # 查看事件（镜像拉取失败、OOM 等）
+```
+
+**事件输出示例：**
+
+```
+=== point-1 (Failed) ===
+  [Warning] Failed: Error: ImagePullBackOff  (2026-04-13T10:00:00Z)
+  [Warning] BackOff: Back-off pulling image "bad-image:latest"  (2026-04-13T10:00:05Z)
+```
+
+### `--json` — Agent 可解析的输出
+
+所有查询命令都支持 `--json`，Agent 调用时**务必加上**，不要解析人类可读文本：
+
+```bash
+# deploy 返回
+python3 gongji.py deploy my-image:v1 -n svc -g 4090 -p 8080 --json
+# {"task_id": 388, "status": "Running", "urls": [{"url": "https://xxx:8080", "port": 8080}]}
+
+# list 返回
+python3 gongji.py list --json
+# [{"task_id": 388, "task_name": "svc", "status": "Running", "urls": [{"url": "https://xxx:8080", "port": 8080}]}]
+
+# status 返回完整任务详情 JSON
+python3 gongji.py status 388 --json
+```
 
 ---
 

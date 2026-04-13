@@ -1,79 +1,67 @@
 # /gongji — 共绩算力弹性部署
 
-管理共绩算力 GPU 弹性部署任务。在 Agent 开发中需要 GPU 算力时自动调用。
+管理共绩算力 GPU 弹性部署任务。Agent 需要 GPU 算力时自动调用。
 
 TRIGGER: 用户提到"部署"、"发布任务"、"GPU"、"算力"、"共绩"、"弹性部署"、"跑模型"、"推理服务"，或需要创建/管理 GPU 计算任务时触发。
 
 ## 命令速查
 
 ```bash
-python3 gongji.py init                    # 首次配置（生成密钥、输入Token）
-python3 gongji.py resources               # 查看可用GPU和价格
-python3 gongji.py deploy <image> -n <name> -g <gpu> -p <port>   # 部署
-python3 gongji.py list                    # 列出任务（含访问地址）
-python3 gongji.py status <task_id>        # 任务详情
-python3 gongji.py stop <task_id>          # 删除任务
+python3 gongji.py init --token <token>       # 初始化（非交互，Agent用）
+python3 gongji.py resources --json            # 查GPU资源（JSON）
+python3 gongji.py deploy <image> -n <name> -g <gpu> -p <port> --json  # 部署（JSON返回URL）
+python3 gongji.py list --json                 # 列出任务+URL（JSON）
+python3 gongji.py status <id> --json          # 任务详情（JSON）
+python3 gongji.py logs <id>                   # 查看日志
+python3 gongji.py logs <id> --events          # 查看事件（排查启动失败）
+python3 gongji.py stop <id> -f                # 释放资源
 ```
 
-## 典型工作流
+## Agent 调用关键点
 
-### 首次使用
+1. **用 `--json` 获取结构化输出**，不要解析人类可读文本
+2. deploy 返回 `{"task_id": 388, "status": "Running", "urls": [{"url": "https://...", "port": 8080}]}`
+3. list 返回 `[{"task_id": 388, "task_name": "...", "status": "...", "urls": [...]}]`
+4. deploy **自动选最便宜的有库存资源**
+5. 部署失败时用 `logs <id> --events` 查原因
+
+## 典型 Agent 工作流
+
 ```bash
-python3 gongji.py init
-# 按提示：生成密钥 → 上传公钥到控制台 → 输入Token → 验证连通
-```
+# 1. 部署，拿到URL
+python3 gongji.py deploy my-registry/vllm:latest -n my-llm -g 4090 -p 8080 --json
+# 输出: {"task_id": 388, "status": "Running", "urls": [{"url": "https://xxx:8080", "port": 8080}]}
 
-### Agent 需要GPU时
-```bash
-# 1. 查看可用资源（可选）
-python3 gongji.py resources
+# 2. 用URL调推理API
+# curl https://xxx:8080/v1/chat/completions ...
 
-# 2. 部署（自动查资源→创建→等Running→返回URL）
-python3 gongji.py deploy my-registry/vllm:latest -n my-llm -g 4090 -p 8080
-
-# 3. 拿到访问地址后直接调用
-# 输出: 访问地址: https://xxx.suanli.cn:8080 (端口 8080)
+# 3. 出问题查日志
+python3 gongji.py logs 388
+python3 gongji.py logs 388 --events
 
 # 4. 用完释放
-python3 gongji.py stop <task_id> --force
+python3 gongji.py stop 388 -f
 ```
 
-### deploy 全部参数
+## deploy 参数
+
 ```bash
 python3 gongji.py deploy <image> \
   -n <name>             # 任务名（必填）
-  -g <gpu>              # GPU型号: 4090/H800（可选，默认自动选）
-  -p <port>             # 端口，多个逗号分隔（默认8080）
+  -g <gpu>              # GPU型号: 4090/H800（可选）
+  -p <port>             # 端口（默认8080）
   --points <N>          # 节点数（默认1）
   --env <env>           # 环境变量
   --start-cmd <cmd>     # 启动命令
-  --start-args "<args>" # 启动参数（引号包裹）
+  --start-args "<args>" # 启动参数
   --no-wait             # 不等待就绪
-```
-
-### stop 操作
-```bash
-python3 gongji.py stop <id>            # 删除（需确认）
-python3 gongji.py stop <id> -f         # 强制删除
-python3 gongji.py stop <id> --pause    # 暂停（可恢复）
-python3 gongji.py stop <id> --resume   # 恢复
+  --json                # JSON输出
 ```
 
 ## 前置条件
 
-如果配置不存在，引导用户运行 `python3 gongji.py init`，或手动配置：
-1. 登录 https://www.gongjiyun.com → 头像 → API 密钥 → RSA 模式
-2. `openssl genrsa -out ~/.gongji/private.key 2048`
-3. `openssl rsa -pubout -in ~/.gongji/private.key -out public.pem`，上传公钥
-4. 创建 `~/.gongji/config.json`：`{"token": "xxx", "private_key_path": "~/.gongji/private.key"}`
-
-## Python API
-
-```python
-from core.client import GongjiClient
-client = GongjiClient()
-resources = client.search_resources()
-result = client.create_task(task_name="x", mark="...", service_image="img:v1", ports=[8080])
-detail = client.task_detail(task_id=388)
-client.stop_task(task_id=388)
+如果配置不存在，运行:
+```bash
+python3 gongji.py init --token <your-token>
 ```
+或引导用户: https://www.gongjiyun.com → 头像 → API密钥 → RSA模式
