@@ -33,9 +33,15 @@ Agent: "用完了，释放"
 ### 第二步：安装
 
 ```bash
+pip install git+https://github.com/shaozheng0503/gongjiskills.git
+```
+
+安装后全局可用 `gongji` 命令。也可以 clone 后本地安装：
+
+```bash
 git clone https://github.com/shaozheng0503/gongjiskills.git
 cd gongjiskills
-pip install -r requirements.txt
+pip install .
 ```
 
 ### 第三步：初始化配置
@@ -285,15 +291,20 @@ Agent 会自动调用 CLI 完成操作并返回结果。
 
 ```
 gongjiskills/
-├── gongji.py            # CLI 入口（deploy / list / status / stop）
-├── core/
-│   ├── auth.py          # RSA-SHA256 签名 + 配置加载
-│   └── client.py        # 共绩算力 API 客户端
+├── gongji.py              # CLI 入口（兼容 python3 gongji.py）
+├── gongjiskills/           # Python 包（pip install 后 import）
+│   ├── __init__.py        # from gongjiskills import GongjiClient
+│   ├── auth.py            # RSA-SHA256 签名 + 配置加载
+│   ├── client.py          # 共绩算力 API 客户端
+│   └── cli.py             # CLI 实现
+├── tests/                  # 20 个测试
+│   ├── test_cli.py        # CLI 参数解析 + JSON 输出
+│   └── test_auth.py       # 签名逻辑 + 配置加载
 ├── skills/
-│   └── gongji.md        # Claude Code Skill 定义
-├── requirements.txt
-├── CLAUDE.md
-└── README.md
+│   └── gongji.md          # Claude Code Skill 定义
+├── setup.py
+├── pyproject.toml
+└── requirements.txt
 ```
 
 ## 支持的 API
