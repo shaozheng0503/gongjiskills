@@ -15,18 +15,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from core.client import GongjiClient
 
 
+_json_mode = False
+
+
 def _ok(res: dict) -> bool:
     return str(res.get("code")) == "200"
 
 
 def _fail(msg: str):
     sys.stdout.flush()
+    if _json_mode:
+        print(json.dumps({"error": msg}, ensure_ascii=False))
+        sys.exit(1)
     print(f"错误: {msg}", file=sys.stderr)
     sys.exit(1)
 
 
 def _json_out(data):
-    """JSON 输出模式：打印后直接退出"""
     print(json.dumps(data, indent=2, ensure_ascii=False))
     sys.exit(0)
 
@@ -461,17 +466,21 @@ def cmd_stop(client: GongjiClient, args):
         res = client.recover_task(args.task_id)
         action = "恢复"
     else:
-        if not args.force:
+        if not args.force and not args.json:
             confirm = input(f"确认删除任务 {args.task_id}？此操作不可恢复 (y/N): ")
             if confirm.lower() != "y":
                 print("已取消")
                 return
-        print(f"正在删除任务 {args.task_id}...")
+        if not args.json:
+            print(f"正在删除任务 {args.task_id}...")
         res = client.stop_task(args.task_id)
         action = "删除"
 
     if not _ok(res):
         _fail(f"{action}失败: {res.get('message', res)}")
+
+    if args.json:
+        _json_out({"task_id": args.task_id, "action": action, "ok": True})
 
     print(f"任务 {args.task_id} 已{action}")
 
@@ -529,8 +538,13 @@ def main():
     action_group.add_argument("--pause", dest="action", action="store_const", const="pause", help="暂停（可恢复）")
     action_group.add_argument("--resume", dest="action", action="store_const", const="resume", help="恢复暂停的任务")
     p_stop.add_argument("--force", "-f", action="store_true", help="跳过确认直接删除")
+    p_stop.add_argument("--json", "-j", action="store_true", help="JSON格式输出")
 
     args = parser.parse_args()
+
+    # 设置全局 JSON 模式，让 _fail 也输出 JSON
+    global _json_mode
+    _json_mode = getattr(args, "json", False)
 
     if args.cmd == "init":
         cmd_init(args)
