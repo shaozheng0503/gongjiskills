@@ -18,8 +18,15 @@ def load_config() -> dict:
             "请先创建配置文件，格式:\n"
             '{"token": "your-token", "private_key_path": "~/.gongji/private.key"}'
         )
-    with open(config_path) as f:
-        config = json.load(f)
+    try:
+        with open(config_path) as f:
+            config = json.load(f)
+    except json.JSONDecodeError:
+        raise ValueError(
+            f"配置文件格式错误: {config_path}\n"
+            "请检查 JSON 格式是否正确，示例:\n"
+            '{"token": "your-token", "private_key_path": "~/.gongji/private.key"}'
+        )
     for key in ("token", "private_key_path"):
         if key not in config:
             raise KeyError(f"配置缺少必填字段: {key}")

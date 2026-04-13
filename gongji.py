@@ -9,22 +9,37 @@ import time
 from core.client import GongjiClient
 
 
+def _ok(res: dict) -> bool:
+    """判断 API 响应是否成功"""
+    return str(res.get("code")) == "200"
+
+
+def _fail(msg: str):
+    sys.stdout.flush()
+    print(f"错误: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
 def cmd_deploy(client: GongjiClient, args):
     """查资源 → 创建任务 → 等待就绪 → 返回URL"""
 
-    # 1. 查可用资源
-    print(f"正在查询可用 GPU 资源...")
+    # 1. 校验端口
+    try:
+        ports = [int(p) for p in args.port.split(",")]
+    except ValueError:
+        _fail(f"端口格式无效: {args.port}，应为数字，多个用逗号分隔（如 8080,8443）")
+
+    # 2. 查可用资源
+    print("正在查询可用 GPU 资源...")
     res = client.search_resources()
-    if res.get("code") != "200" and res.get("code") != 200:
-        print(f"查询资源失败: {res.get('message', res)}", file=sys.stderr)
-        sys.exit(1)
+    if not _ok(res):
+        _fail(f"查询资源失败: {res.get('message', res)}")
 
     results = res.get("data", {}).get("results", [])
     if not results:
-        print("当前无可用 GPU 资源", file=sys.stderr)
-        sys.exit(1)
+        _fail("当前无可用 GPU 资源")
 
-    # 2. 匹配GPU型号
+    # 3. 匹配GPU型号
     matched = None
     matched_region = None
     for device in results:
@@ -47,17 +62,16 @@ def cmd_deploy(client: GongjiClient, args):
             for r in d.get("regions", []):
                 if r.get("inventory", 0) > 0:
                     price = r.get("discount_price") or r.get("price") or "N/A"
-                    print(f"  {d['gpu_name']} ×{d['gpu_count']} | {r['region_name']} | 库存 {r['inventory']} | ¥{price}/h")
+                    print(f"  {d['gpu_name']} x{d['gpu_count']} | {r['region_name']} | 库存 {r['inventory']} | {price}/h")
         sys.exit(1)
 
     mark = matched_region.get("mark", {}).get("mark", "")
     mark_resource = matched_region.get("mark", {}).get("resource", {})
     price = matched_region.get("discount_price") or matched_region.get("price") or "N/A"
 
-    print(f"选中资源: {matched['gpu_name']} ×{matched['gpu_count']} | {matched_region['region_name']} | ¥{price}/h")
+    print(f"选中资源: {matched['gpu_name']} x{matched['gpu_count']} | {matched_region['region_name']} | {price}/h")
 
-    # 3. 创建任务
-    ports = [int(p) for p in args.port.split(",")]
+    # 4. 创建任务
     create_kwargs = dict(
         task_name=args.name,
         mark=mark,
@@ -74,36 +88,37 @@ def cmd_deploy(client: GongjiClient, args):
     )
     if args.env:
         create_kwargs["env"] = args.env
-    if args.command:
-        create_kwargs["command"] = args.command
-    if args.args:
-        create_kwargs["args"] = args.args
+    if args.start_cmd:
+        create_kwargs["command"] = args.start_cmd
+    if args.start_args:
+        create_kwargs["args"] = args.start_args
 
     print(f"正在创建任务 [{args.name}]...")
     res = client.create_task(**create_kwargs)
-    if res.get("code") != "200" and res.get("code") != 200:
-        print(f"创建任务失败: {res.get('message', res)}", file=sys.stderr)
-        sys.exit(1)
+    if not _ok(res):
+        _fail(f"创建任务失败: {res.get('message', res)}")
 
     task_id = res["data"]["task_id"]
     print(f"任务已创建, task_id={task_id}")
 
-    # 4. 等待就绪
+    # 5. 等待就绪
     if not args.no_wait:
-        print("等待任务启动...", end="", flush=True)
+        print("等待任务启动", end="", flush=True)
         for _ in range(60):
             time.sleep(5)
             detail = client.task_detail(task_id)
-            status = detail.get("data", {}).get("status", "")
+            data = detail.get("data") or {}
+            status = data.get("status", "")
             if status == "Running":
                 print(" Running!")
-                _print_task_urls(detail["data"])
+                _print_task_urls(data)
                 return
             if status in ("End", "Other"):
-                print(f"\n任务异常终止, status={status}", file=sys.stderr)
-                sys.exit(1)
+                print()
+                _fail(f"任务异常终止, status={status}")
             print(".", end="", flush=True)
-        print("\n等待超时，请手动查询: gongji.py status {task_id}")
+        print()
+        _fail(f"等待超时，请手动查询: python3 gongji.py status {task_id}")
 
     print(json.dumps({"task_id": task_id}, ensure_ascii=False))
 
@@ -112,9 +127,8 @@ def cmd_list(client: GongjiClient, args):
     """列出当前任务"""
     status = args.status if args.status else "Running,Pending,Paused"
     res = client.search_tasks(status=status)
-    if res.get("code") != "200" and res.get("code") != 200:
-        print(f"查询失败: {res.get('message', res)}", file=sys.stderr)
-        sys.exit(1)
+    if not _ok(res):
+        _fail(f"查询失败: {res.get('message', res)}")
 
     tasks = res.get("data", {}).get("results", [])
     if not tasks:
@@ -128,21 +142,19 @@ def cmd_list(client: GongjiClient, args):
         resources = t.get("resources", [])
         if resources:
             r = resources[0].get("resource", {})
-            gpu_info = f"{r.get('gpu_name', '')} ×{r.get('gpu_count', '')}"
+            gpu_info = f"{r.get('gpu_name', '')} x{r.get('gpu_count', '')}"
         print(f"{t.get('task_id', ''):<8} {t.get('task_name', ''):<20} {t.get('status', ''):<10} {t.get('runing_points', 0):<6} {gpu_info:<20}")
 
 
 def cmd_status(client: GongjiClient, args):
     """查看任务详情和访问URL"""
     res = client.task_detail(args.task_id)
-    if res.get("code") != "200" and res.get("code") != 200:
-        print(f"查询失败: {res.get('message', res)}", file=sys.stderr)
-        sys.exit(1)
+    if not _ok(res):
+        _fail(f"查询失败: {res.get('message', res)}")
 
     data = res.get("data")
     if not data:
-        print(f"任务 {args.task_id} 不存在")
-        sys.exit(1)
+        _fail(f"任务 {args.task_id} 不存在")
 
     print(f"任务ID:   {data.get('task_id')}")
     print(f"名称:     {data.get('task_name')}")
@@ -152,7 +164,7 @@ def cmd_status(client: GongjiClient, args):
     resources = data.get("resources", [])
     if resources:
         r = resources[0].get("resource", {})
-        print(f"GPU:      {r.get('gpu_name', '')} ×{r.get('gpu_count', '')}")
+        print(f"GPU:      {r.get('gpu_name', '')} x{r.get('gpu_count', '')}")
         print(f"内存:     {r.get('memory', 0)} MB | CPU: {r.get('cpu_cores', 0)} 核")
 
     _print_task_urls(data)
@@ -163,12 +175,12 @@ def cmd_status(client: GongjiClient, args):
 
 
 def cmd_stop(client: GongjiClient, args):
-    """停止/暂停任务"""
-    if args.pause:
+    """停止/暂停/恢复任务"""
+    if args.action == "pause":
         print(f"正在暂停任务 {args.task_id}（资源将释放，可恢复）...")
         res = client.pause_task(args.task_id)
         action = "暂停"
-    elif args.resume:
+    elif args.action == "resume":
         print(f"正在恢复任务 {args.task_id}...")
         res = client.recover_task(args.task_id)
         action = "恢复"
@@ -182,9 +194,8 @@ def cmd_stop(client: GongjiClient, args):
         res = client.stop_task(args.task_id)
         action = "删除"
 
-    if res.get("code") != "200" and res.get("code") != 200:
-        print(f"{action}失败: {res.get('message', res)}", file=sys.stderr)
-        sys.exit(1)
+    if not _ok(res):
+        _fail(f"{action}失败: {res.get('message', res)}")
 
     print(f"任务 {args.task_id} 已{action}")
 
@@ -200,19 +211,22 @@ def _print_task_urls(data: dict):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="共绩算力 CLI")
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(
+        description="共绩算力 CLI — 弹性部署 GPU 任务",
+        epilog="文档: https://github.com/shaozheng0503/gongjiskills",
+    )
+    sub = parser.add_subparsers(dest="cmd", required=True)
 
     # deploy
     p_deploy = sub.add_parser("deploy", help="创建弹性部署任务")
     p_deploy.add_argument("image", help="Docker 镜像地址")
     p_deploy.add_argument("--name", "-n", required=True, help="任务名称")
     p_deploy.add_argument("--gpu", "-g", default=None, help="GPU型号关键词，如 4090/H800")
-    p_deploy.add_argument("--port", "-p", default="8080", help="暴露端口，多个用逗号分隔")
-    p_deploy.add_argument("--points", type=int, default=1, help="节点数量 (默认1)")
+    p_deploy.add_argument("--port", "-p", default="8080", help="暴露端口，多个用逗号分隔 (默认 8080)")
+    p_deploy.add_argument("--points", type=int, default=1, help="节点数量 (默认 1)")
     p_deploy.add_argument("--env", default=None, help="环境变量")
-    p_deploy.add_argument("--command", default=None, help="启动命令")
-    p_deploy.add_argument("--args", nargs="*", default=None, help="启动参数")
+    p_deploy.add_argument("--start-cmd", default=None, help="容器启动命令")
+    p_deploy.add_argument("--start-args", nargs="*", default=None, help="容器启动参数")
     p_deploy.add_argument("--no-wait", action="store_true", help="不等待任务就绪")
 
     # list
@@ -227,12 +241,17 @@ def main():
     # stop
     p_stop = sub.add_parser("stop", help="停止/暂停/恢复任务")
     p_stop.add_argument("task_id", type=int, help="任务ID")
-    p_stop.add_argument("--pause", action="store_true", help="暂停（可恢复）")
-    p_stop.add_argument("--resume", action="store_true", help="恢复暂停的任务")
+    action_group = p_stop.add_mutually_exclusive_group()
+    action_group.add_argument("--pause", dest="action", action="store_const", const="pause", help="暂停（可恢复）")
+    action_group.add_argument("--resume", dest="action", action="store_const", const="resume", help="恢复暂停的任务")
     p_stop.add_argument("--force", "-f", action="store_true", help="跳过确认直接删除")
 
     args = parser.parse_args()
-    client = GongjiClient()
+
+    try:
+        client = GongjiClient()
+    except (FileNotFoundError, KeyError, ValueError) as e:
+        _fail(str(e))
 
     commands = {
         "deploy": cmd_deploy,
@@ -240,7 +259,13 @@ def main():
         "status": cmd_status,
         "stop": cmd_stop,
     }
-    commands[args.command](client, args)
+    try:
+        commands[args.cmd](client, args)
+    except KeyboardInterrupt:
+        print("\n已中断")
+        sys.exit(130)
+    except Exception as e:
+        _fail(str(e))
 
 
 if __name__ == "__main__":

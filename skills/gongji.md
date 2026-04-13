@@ -10,39 +10,39 @@ TRIGGER: 用户提到"部署"、"发布任务"、"GPU"、"算力"、"共绩"、"
 
 ### 部署任务
 ```bash
-python gongji.py deploy <镜像地址> --name <任务名> --gpu <GPU型号> --port <端口>
+python3 gongji.py deploy <镜像地址> --name <任务名> --gpu <GPU型号> --port <端口>
 ```
 
 示例:
 ```bash
 # 部署一个推理服务到4090
-python gongji.py deploy my-registry/my-model:v1 --name my-inference --gpu 4090 --port 8080
+python3 gongji.py deploy my-registry/my-model:v1 --name my-inference --gpu 4090 --port 8080
 
 # 多端口 + 2节点
-python gongji.py deploy my-image:latest --name my-svc --gpu 4090 --port 8080,8443 --points 2
+python3 gongji.py deploy my-image:latest --name my-svc --gpu 4090 --port 8080,8443 --points 2
 
 # 带启动命令
-python gongji.py deploy my-image:latest --name my-svc --gpu 4090 --port 8080 --command "python" --args serve.py --host 0.0.0.0
+python3 gongji.py deploy my-image:latest --name my-svc --gpu 4090 --port 8080 --start-cmd "python" --start-args serve.py --host 0.0.0.0
 ```
 
 ### 查看任务列表
 ```bash
-python gongji.py list
-python gongji.py list --status Running
+python3 gongji.py list
+python3 gongji.py list --status Running
 ```
 
 ### 查看任务状态和访问URL
 ```bash
-python gongji.py status <task_id>
-python gongji.py status <task_id> --json  # 完整详情
+python3 gongji.py status <task_id>
+python3 gongji.py status <task_id> --json  # 完整详情
 ```
 
 ### 停止/暂停/恢复任务
 ```bash
-python gongji.py stop <task_id>            # 删除（不可恢复，需确认）
-python gongji.py stop <task_id> --force    # 强制删除
-python gongji.py stop <task_id> --pause    # 暂停（释放资源，可恢复）
-python gongji.py stop <task_id> --resume   # 恢复暂停的任务
+python3 gongji.py stop <task_id>            # 删除（不可恢复，需确认）
+python3 gongji.py stop <task_id> --force    # 强制删除
+python3 gongji.py stop <task_id> --pause    # 暂停（释放资源，可恢复）
+python3 gongji.py stop <task_id> --resume   # 恢复暂停的任务
 ```
 
 ## 工作流程

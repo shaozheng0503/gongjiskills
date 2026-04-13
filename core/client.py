@@ -10,6 +10,10 @@ import requests
 from .auth import load_config, load_private_key, build_headers
 
 
+class GongjiError(Exception):
+    """共绩算力 API 错误"""
+
+
 class GongjiClient:
     """共绩算力 Open API 客户端（RSA签名模式）"""
 
@@ -18,25 +22,41 @@ class GongjiClient:
         self.private_key = load_private_key(self.config)
         self.base_url = self.config["base_url"].rstrip("/")
 
-    def _get(self, path: str, params: dict = None) -> dict:
-        """发送GET请求，path中包含query string参与签名"""
-        full_path = path
+    def _request(self, method: str, path: str, params: dict = None, body: dict = None) -> dict:
+        sign_path = path
         if params:
-            full_path = f"{path}?{urlencode(params)}"
-        headers = build_headers(full_path, self.config, self.private_key, body="{}")
-        url = f"{self.base_url}{full_path}"
-        resp = requests.get(url, headers=headers, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+            sign_path = f"{path}?{urlencode(params)}"
+        body_str = "{}"
+        if body is not None:
+            body_str = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
+
+        headers = build_headers(sign_path, self.config, self.private_key, body=body_str)
+        url = f"{self.base_url}{sign_path}"
+
+        try:
+            if method == "GET":
+                resp = requests.get(url, headers=headers, timeout=30)
+            else:
+                resp = requests.post(url, headers=headers, data=body_str, timeout=30)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.ConnectionError:
+            raise GongjiError(f"无法连接到 API 服务器 ({self.base_url})，请检查网络")
+        except requests.exceptions.Timeout:
+            raise GongjiError("API 请求超时，请稍后重试")
+        except requests.exceptions.HTTPError as e:
+            try:
+                err_data = e.response.json()
+                msg = err_data.get("message") or err_data.get("error") or str(err_data)
+            except Exception:
+                msg = f"HTTP {e.response.status_code}"
+            raise GongjiError(f"API 返回错误: {msg}")
+
+    def _get(self, path: str, params: dict = None) -> dict:
+        return self._request("GET", path, params=params)
 
     def _post(self, path: str, body: dict) -> dict:
-        """发送POST请求，body的JSON字符串参与签名"""
-        body_str = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
-        headers = build_headers(path, self.config, self.private_key, body=body_str)
-        url = f"{self.base_url}{path}"
-        resp = requests.post(url, headers=headers, data=body_str, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+        return self._request("POST", path, body=body)
 
     # ── 资源 ──
 

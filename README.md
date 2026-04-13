@@ -76,9 +76,9 @@ pip install cryptography requests
 ```bash
 # 部署镜像到 4090，暴露 8080 端口
 python3 gongji.py deploy my-registry/vllm-server:latest \
-  --name my-llm \
-  --gpu 4090 \
-  --port 8080
+  -n my-llm \
+  -g 4090 \
+  -p 8080
 
 # 部署完成后输出:
 # 选中资源: RTX 4090 ×1 | 区域A | ¥1.68/h
