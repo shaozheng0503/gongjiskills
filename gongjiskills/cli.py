@@ -16,7 +16,23 @@ _json_mode = False
 
 
 def _ok(res: dict) -> bool:
-    return str(res.get("code")) == "200"
+    code = str(res.get("code", ""))
+    return code in ("200", "0000")
+
+
+def _fmt_price(raw) -> str:
+    """API 返回分，转为元"""
+    if raw is None:
+        return "-"
+    return f"{raw / 100:.2f}"
+
+
+def _fmt_mem(mb) -> str:
+    """MB 转 GB"""
+    if not mb:
+        return "0"
+    gb = mb / 1024
+    return f"{gb:.0f}" if gb == int(gb) else f"{gb:.1f}"
 
 
 def _fail(msg: str):
@@ -129,21 +145,21 @@ def cmd_resources(client: GongjiClient, args):
     for device in results:
         gpu = device.get("gpu_name", "?")
         gpu_count = device.get("gpu_count", "?")
-        gpu_mem = device.get("gpu_memory", 0)
+        gpu_mem = _fmt_mem(device.get("gpu_memory", 0))
         cpu = device.get("cpu_cores", 0)
-        mem = device.get("memory", 0)
+        mem = _fmt_mem(device.get("memory", 0))
 
-        print(f"\n{gpu} x{gpu_count}  (显存 {gpu_mem}G | {cpu}核 | {mem // 1024}G 内存)")
-        print(f"  {'区域':<12} {'库存':<6} {'原价':<10} {'折扣价':<10}")
-        print(f"  {'-'*42}")
+        print(f"\n{gpu} x{gpu_count}  (显存 {gpu_mem}G | {cpu}核 | {mem}G)")
+        print(f"  {'区域':<12} {'库存':<6} {'单价(元/h)':<12} {'折扣价(元/h)':<12}")
+        print(f"  {'-'*46}")
 
         for r in device.get("regions", []):
             region_name = r.get("region_name", "?")
             inventory = r.get("inventory", 0)
-            price = r.get("price") or "-"
-            discount = r.get("discount_price") or "-"
+            price = _fmt_price(r.get("price"))
+            discount = _fmt_price(r.get("discount_price"))
             stock_mark = "" if inventory > 0 else " (售罄)"
-            print(f"  {region_name:<12} {inventory:<6} {price:<10} {discount:<10}{stock_mark}")
+            print(f"  {region_name:<12} {inventory:<6} {price:<12} {discount:<12}{stock_mark}")
 
     count = res.get("data", {}).get("count", 0)
     print(f"\n共 {count} 种规格")
@@ -204,16 +220,16 @@ def cmd_deploy(client: GongjiClient, args):
         for d in results:
             for r in d.get("regions", []):
                 if r.get("inventory", 0) > 0:
-                    price = r.get("discount_price") or r.get("price") or "N/A"
-                    print(f"  {d['gpu_name']} x{d['gpu_count']} | {r['region_name']} | 库存 {r['inventory']} | {price}/h")
+                    p = _fmt_price(r.get("discount_price") or r.get("price"))
+                    print(f"  {d['gpu_name']} x{d['gpu_count']} | {r['region_name']} | 库存 {r['inventory']} | {p}元/h")
         sys.exit(1)
 
     mark = matched_region.get("mark", {}).get("mark", "")
     mark_resource = matched_region.get("mark", {}).get("resource", {})
-    price = matched_region.get("discount_price") or matched_region.get("price") or "N/A"
+    price = _fmt_price(matched_region.get("discount_price") or matched_region.get("price"))
 
     if not args.json:
-        print(f"选中资源: {matched['gpu_name']} x{matched['gpu_count']} | {matched_region['region_name']} | {price}/h (最低价)")
+        print(f"选中资源: {matched['gpu_name']} x{matched['gpu_count']} | {matched_region['region_name']} | {price}元/h (最低价)")
 
     # 4. 创建任务
     create_kwargs = dict(
@@ -366,8 +382,8 @@ def cmd_status(client: GongjiClient, args):
     resources = data.get("resources", [])
     if resources:
         r = resources[0].get("resource", {})
-        print(f"GPU:      {r.get('gpu_name', '')} x{r.get('gpu_count', '')}")
-        print(f"内存:     {r.get('memory', 0)} MB | CPU: {r.get('cpu_cores', 0)} 核")
+        print(f"GPU:      {r.get('gpu_name', '')} x{r.get('gpu_count', '')} (显存 {_fmt_mem(r.get('gpu_memory', 0))}G)")
+        print(f"内存:     {_fmt_mem(r.get('memory', 0))}G | CPU: {r.get('cpu_cores', 0)} 核")
 
     for u in _get_urls(data):
         print(f"访问地址: {u['url']} (端口 {u['port']})")
