@@ -149,6 +149,13 @@ def cmd_resources(client: GongjiClient, args):
     show_all = args.all
     shown = 0
 
+    # 按最低折扣价排序（便宜的在前）
+    def _min_price(d):
+        prices = [r.get("discount_price") or r.get("price") or float("inf")
+                  for r in d.get("regions", []) if show_all or r.get("inventory", 0) > 0]
+        return min(prices) if prices else float("inf")
+    results = sorted(results, key=_min_price)
+
     for device in results:
         gpu = device.get("gpu_name", "?")
         gpu_count = device.get("gpu_count", "?")
@@ -185,12 +192,14 @@ def cmd_resources(client: GongjiClient, args):
 
 # ── deploy ──
 
-def _find_cheapest(results: list, gpu_filter: str = None):
+def _find_cheapest(results: list, gpu_filter: str = None, gpu_count: int = None):
     """找到有库存且最便宜的资源"""
     candidates = []
     for device in results:
         gpu = device.get("gpu_name", "")
         if gpu_filter and gpu_filter.lower() not in gpu.lower():
+            continue
+        if gpu_count and device.get("gpu_count") != gpu_count:
             continue
         for region_info in device.get("regions", []):
             if region_info.get("inventory", 0) <= 0:
@@ -229,7 +238,7 @@ def cmd_deploy(client: GongjiClient, args):
         _fail("当前无可用 GPU 资源")
 
     # 3. 选最便宜的有库存资源
-    matched, matched_region = _find_cheapest(results, args.gpu)
+    matched, matched_region = _find_cheapest(results, args.gpu, getattr(args, 'gpu_count', None))
 
     if not matched or not matched_region:
         gpu_hint = f" ({args.gpu})" if args.gpu else ""
@@ -335,7 +344,7 @@ def cmd_deploy(client: GongjiClient, args):
 
 def cmd_list(client: GongjiClient, args):
     """列出当前任务"""
-    status = args.status if args.status else "Running,Pending,Paused"
+    status = args.status if args.status else "Running,Pending"
     res = client.search_tasks(status=status)
     if not _ok(res):
         _fail(f"查询失败: {res.get('message', res)}")
@@ -540,6 +549,7 @@ def main():
     p_deploy.add_argument("image", help="Docker 镜像地址")
     p_deploy.add_argument("--name", "-n", required=True, help="任务名称")
     p_deploy.add_argument("--gpu", "-g", default=None, help="GPU型号关键词，如 4090/H800")
+    p_deploy.add_argument("--gpu-count", "-c", type=int, default=None, help="GPU卡数，如 1/2/4/8")
     p_deploy.add_argument("--port", "-p", default="8080", help="暴露端口，多个用逗号分隔 (默认 8080)")
     p_deploy.add_argument("--points", type=int, default=1, help="节点数量 (默认 1)")
     p_deploy.add_argument("--env", default=None, help="环境变量")
@@ -550,7 +560,7 @@ def main():
 
     # list
     p_list = sub.add_parser("list", help="列出任务")
-    p_list.add_argument("--status", "-s", default=None, help="筛选状态: Running,Pending,Paused,End")
+    p_list.add_argument("--status", "-s", default=None, help="筛选状态 (默认 Running,Pending)，可选: Paused,End")
     p_list.add_argument("--json", "-j", action="store_true", help="JSON格式输出")
 
     # status

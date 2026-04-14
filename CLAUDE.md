@@ -5,46 +5,30 @@
 ## 快速开始
 
 ```bash
-# 安装依赖
-pip install cryptography requests
-
-# 配置密钥
-mkdir -p ~/.gongji
-openssl genrsa -out ~/.gongji/private.key 2048
-openssl rsa -pubout -in ~/.gongji/private.key -out ~/.gongji/public.pem
-# 将 public.pem 内容上传到共绩算力控制台（API密钥 → RSA模式）
-
-# 创建配置
-cat > ~/.gongji/config.json << 'EOF'
-{
-  "token": "your-api-token-here",
-  "private_key_path": "~/.gongji/private.key"
-}
-EOF
-```
-
-## CLI 用法
-
-```bash
-python gongji.py deploy <image> --name <name> --gpu <gpu> --port <port>
-python gongji.py list
-python gongji.py status <task_id>
-python gongji.py stop <task_id>
+pip install .
+gongji init           # 首次配置
+gongji resources      # 查看GPU
+gongji deploy <image> -n <name> -g 4090 -p 8080  # 部署
+gongji list           # 查看任务
+gongji stop <id> -f   # 释放
 ```
 
 ## 项目结构
 
 ```
-core/auth.py     — RSA签名
-core/client.py   — API客户端
-gongji.py        — CLI入口
-skills/gongji.md — Claude Code skill定义
+gongjiskills/          # Python 包
+  auth.py              # RSA-SHA256 签名
+  client.py            # API 客户端
+  cli.py               # CLI 实现
+tests/                 # 23 个测试
+skills/gongji.md       # Claude Code Skill 定义
+gongji.py              # 兼容入口
 ```
 
-## 认证方式
+## API
 
-RSA-SHA256 签名模式（PKCS1v15），签名串: `path\nversion\ntimestamp\ntoken\ndata`
-
-## API Base URL
-
-`https://openapi.suanli.cn`
+- Base URL: `https://openapi.suanli.cn`
+- 认证: RSA-SHA256 签名 (PKCS1v15)
+- 签名串: `path\nversion\ntimestamp\ntoken\ndata`
+- 价格单位: 微元/秒 (10^-6 yuan/s)，转元/h: `raw * 3600 / 1000000`
+- 成功码: `"0000"` (不是 `"200"`)
