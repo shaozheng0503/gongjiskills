@@ -51,14 +51,20 @@ gongji init
 ```
 
 `init` 会自动完成：
-1. 生成 RSA 密钥对
+1. 生成 RSA 密钥对（私钥权限自动设为 `600`）
 2. 显示公钥内容 → 你粘贴到[控制台](https://www.gongjiyun.com)（头像 → API密钥 → RSA模式）
 3. 输入获取到的 API Token
 4. 验证连通性
 
-Agent 非交互使用：`gongji init --token <your-token>`
+**Agent/CI 非交互使用（推荐环境变量，不会泄露到 shell history）：**
 
-> 也可以手动配置，见 [Open API 使用文档](https://www.gongjiyun.com/docs/platform/openapi/zx3iwhbv1i8sxdkeiapcprxhn8d/) 和 [RSA 模式使用指南](https://www.gongjiyun.com/docs/platform/openapi/m3p6whioxidzwaksughc4gfhnro/)。
+```bash
+GONGJI_TOKEN=xxx gongji init --force
+```
+
+也支持参数传入：`gongji init --token xxx`
+
+> 密钥和配置说明见 [Open API 使用文档](https://www.gongjiyun.com/docs/platform/openapi/zx3iwhbv1i8sxdkeiapcprxhn8d/) 和 [RSA 模式使用指南](https://www.gongjiyun.com/docs/platform/openapi/m3p6whioxidzwaksughc4gfhnro/)。
 
 ### 第四步：验证
 
@@ -101,6 +107,8 @@ gongji resources --json   # JSON 输出
 
 自动查找有库存且**最便宜**的 GPU → 创建弹性部署 → 等待就绪 → 返回访问地址。
 
+等待过程中会实时显示事件（拉镜像、启动容器等），失败时自动输出原因。
+
 ```bash
 gongji deploy <镜像地址> -n <任务名> -g <GPU型号> -p <端口>
 ```
@@ -108,11 +116,14 @@ gongji deploy <镜像地址> -n <任务名> -g <GPU型号> -p <端口>
 **示例：**
 
 ```bash
-# 部署一个推理服务到 4090 单卡
+# 部署推理服务到 4090 单卡
 gongji deploy my-registry/vllm:latest -n my-llm -g 4090 -p 8080
 
-# 指定 4 卡
-gongji deploy my-registry/vllm:latest -n my-llm -g 4090 -c 4 -p 8080
+# 指定 4 卡 + 指定广东区域（就近部署，减少延迟）
+gongji deploy my-registry/vllm:latest -n my-llm -g 4090 -c 4 -r 广东 -p 8080
+
+# Agent 调用（JSON 输出）
+gongji deploy my-registry/vllm:latest -n my-llm -g 4090 -p 8080 --json
 ```
 
 **输出：**
@@ -122,7 +133,11 @@ gongji deploy my-registry/vllm:latest -n my-llm -g 4090 -c 4 -p 8080
 选中资源: 4090 x1 | 广东一区 | 1.05元/h (最低价)
 正在创建任务 [my-llm]...
 任务已创建, task_id=1926525
-等待任务启动........ Running!
+等待任务启动...
+  [Pulling] Pulling image "my-registry/vllm:latest"
+  [Started] Started container istio-proxy
+  [Pulled] Successfully pulled image
+Running!
 访问地址: https://deployment-452-xxx-8080.550w.link (端口 8080)
 ```
 
@@ -142,6 +157,7 @@ curl https://deployment-452-xxx-8080.550w.link/v1/chat/completions \
 | `-n, --name` | 任务名称（必填） | - |
 | `-g, --gpu` | GPU 型号关键词，如 `4090` / `H800` | 自动选最便宜 |
 | `-c, --gpu-count` | GPU 卡数，如 `1` / `4` / `8` | 不限 |
+| `-r, --region` | 区域关键词，如 `广东` / `河南` / `河北` | 不限 |
 | `-p, --port` | 暴露端口，多个用逗号分隔 | `8080` |
 | `--points` | 节点数量 | `1` |
 | `--env` | 环境变量 | - |
@@ -168,7 +184,7 @@ gongji list --json                    # JSON 输出
 ### `status` — 查看任务详情
 
 ```bash
-gongji status 1926525              # 查看状态和访问地址
+gongji status 1926525              # 查看状态、访问地址、费用
 gongji status 1926525 --json       # JSON 输出
 ```
 
@@ -181,6 +197,7 @@ gongji status 1926525 --json       # JSON 输出
 节点数:   1 / 1
 GPU:      4090 x1 (显存 24.0G)
 内存:     63G | CPU: 24 核
+已花费:   36.44 元
 访问地址: https://deployment-452-xxx-8080.550w.link (端口 8080)
 ```
 
@@ -193,6 +210,14 @@ gongji logs 1926525                # 查看容器日志
 gongji logs 1926525 --events       # 查看事件（镜像拉取失败、OOM 等）
 ```
 
+**事件输出示例：**
+
+```
+=== deployment-452-xxx-74f56c675-pk8hf (Pending) ===
+  [Warning] Failed: Error: ImagePullBackOff  (2026-04-13T10:00:00Z)
+  [Normal] Pulling: Pulling image "my-image:v1"  (2026-04-13T09:59:55Z)
+```
+
 ### `stop` — 停止 / 暂停 / 恢复任务
 
 ```bash
@@ -200,19 +225,28 @@ gongji stop 1926525                # 删除（不可恢复，需确认）
 gongji stop 1926525 -f             # 强制删除
 gongji stop 1926525 --pause        # 暂停（释放资源，可恢复）
 gongji stop 1926525 --resume       # 恢复暂停的任务
+gongji stop 1926525 -f --json      # Agent 调用
 ```
 
 ### `--json` — Agent 必须用的输出模式
 
-所有命令都支持 `--json`，**Agent 调用时务必加上**：
+所有命令都支持 `--json`，**Agent 调用时务必加上**。成功和失败都返回合法 JSON：
 
 ```bash
-# deploy 返回
+# deploy 成功
 gongji deploy my-image:v1 -n svc -g 4090 -p 8080 --json
 # {"task_id": 1926525, "status": "Running", "urls": [{"url": "https://xxx", "port": 8080}]}
 
-# 错误也是 JSON
+# 失败
 # {"error": "查询资源失败: token expired"}
+
+# list
+gongji list --json
+# [{"task_id": 1926525, "task_name": "svc", "status": "Running", "urls": [...]}]
+
+# stop
+gongji stop 1926525 -f --json
+# {"task_id": 1926525, "action": "删除", "ok": true}
 ```
 
 ---
@@ -256,12 +290,22 @@ client.stop_task(task_id)
 本项目包含 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) Skill 定义（`skills/gongji.md`），配置后直接对 Agent 说：
 
 - "帮我部署一个 4090 跑推理，镜像是 xxx，开 8080 端口"
+- "部署到广东区域，4 卡 4090"
 - "看看我有哪些任务在跑"
+- "任务 1926525 花了多少钱"
 - "把任务停掉"
 
 Agent 会自动调用 CLI 完成操作并返回结果。
 
 ---
+
+## 安全
+
+- `~/.gongji/` 目录权限 `700`（仅当前用户可访问）
+- `config.json` / `private.key` 权限 `600`（仅当前用户可读写）
+- 加载配置时自动检测权限，过宽时输出警告和修复命令
+- Token 推荐通过**环境变量** `GONGJI_TOKEN` 传入，避免泄露到 shell history
+- RSA 签名模式（PKCS1v15 + SHA256），请求不可伪造
 
 ## 项目结构
 
@@ -270,16 +314,17 @@ gongjiskills/
 ├── gongji.py              # CLI 入口（兼容 python3 gongji.py）
 ├── gongjiskills/           # Python 包（pip install 后 import）
 │   ├── __init__.py        # from gongjiskills import GongjiClient
-│   ├── auth.py            # RSA-SHA256 签名
-│   ├── client.py          # API 客户端
-│   └── cli.py             # CLI 实现
+│   ├── auth.py            # RSA-SHA256 签名 + 权限检查
+│   ├── client.py          # API 客户端 + 网络错误处理
+│   └── cli.py             # CLI 实现（7 个命令）
 ├── tests/                  # 23 个测试
-│   ├── test_cli.py        # CLI + JSON 输出契约
-│   └── test_auth.py       # 签名逻辑
+│   ├── test_cli.py        # CLI 参数解析 + JSON 输出契约
+│   └── test_auth.py       # 签名验证 + 配置加载
 ├── skills/
 │   └── gongji.md          # Claude Code Skill 定义
 ├── setup.py
 ├── pyproject.toml
+├── LICENSE                 # MIT
 └── requirements.txt
 ```
 
@@ -291,11 +336,17 @@ A: 运行 `gongji init` 初始化。
 **Q: 报错 "token expired"**
 A: 登录[控制台](https://www.gongjiyun.com)重新生成 API 密钥，然后 `gongji init --force`。
 
-**Q: 部署后拿不到访问地址**
-A: 任务可能还在拉镜像，用 `gongji logs <id> --events` 查看进度。
+**Q: 报错 "权限过宽"**
+A: 运行提示中的 `chmod` 命令修复，或重新 `gongji init --force`（会自动设置正确权限）。
 
-**Q: 怎么指定 GPU 卡数**
-A: `gongji deploy ... -g 4090 -c 4` 指定 4090 四卡。
+**Q: 部署后拿不到访问地址**
+A: 任务可能还在拉镜像，等待过程会实时显示事件。也可以手动查看：`gongji logs <id> --events`。
+
+**Q: 怎么指定 GPU 卡数和区域**
+A: `gongji deploy ... -g 4090 -c 4 -r 广东`（4090 四卡，广东区域）。
+
+**Q: 怎么看已经花了多少钱**
+A: `gongji status <id>` 会显示累计花费。
 
 ## License
 
