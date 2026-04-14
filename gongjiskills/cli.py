@@ -245,8 +245,8 @@ def cmd_resources(client: GongjiClient, args):
 
 # ── deploy ──
 
-def _find_cheapest(results: list, gpu_filter: str = None, gpu_count: int = None):
-    """找到有库存且最便宜的资源"""
+def _find_cheapest(results: list, gpu_filter: str = None, gpu_count: int = None, region_filter: str = None):
+    """找到有库存且最便宜的资源，可按 GPU/卡数/区域 过滤"""
     candidates = []
     for device in results:
         gpu = device.get("gpu_name", "")
@@ -257,6 +257,11 @@ def _find_cheapest(results: list, gpu_filter: str = None, gpu_count: int = None)
         for region_info in device.get("regions", []):
             if region_info.get("inventory", 0) <= 0:
                 continue
+            if region_filter:
+                rname = region_info.get("region_name", "")
+                rid = region_info.get("region", "")
+                if region_filter.lower() not in rname.lower() and region_filter.lower() not in rid.lower():
+                    continue
             price = region_info.get("discount_price") or region_info.get("price")
             if price is None:
                 price = float("inf")
@@ -291,7 +296,9 @@ def cmd_deploy(client: GongjiClient, args):
         _fail("当前无可用 GPU 资源")
 
     # 3. 选最便宜的有库存资源
-    matched, matched_region = _find_cheapest(results, args.gpu, getattr(args, 'gpu_count', None))
+    matched, matched_region = _find_cheapest(
+        results, args.gpu, getattr(args, 'gpu_count', None), getattr(args, 'region', None)
+    )
 
     if not matched or not matched_region:
         gpu_hint = f" ({args.gpu})" if args.gpu else ""
@@ -471,6 +478,10 @@ def cmd_status(client: GongjiClient, args):
         print(f"GPU:      {r.get('gpu_name', '')} x{r.get('gpu_count', '')} (显存 {_fmt_mem(r.get('gpu_memory', 0))}G)")
         print(f"内存:     {_fmt_mem(r.get('memory', 0))}G | CPU: {r.get('cpu_cores', 0)} 核")
 
+    billing = data.get("billing_value", 0)
+    if billing:
+        print(f"已花费:   {billing / 1000000:.2f} 元")
+
     for u in _get_urls(data):
         print(f"访问地址: {u['url']} (端口 {u['port']})")
 
@@ -609,6 +620,7 @@ def main():
     p_deploy.add_argument("--name", "-n", required=True, help="任务名称")
     p_deploy.add_argument("--gpu", "-g", default=None, help="GPU型号关键词，如 4090/H800")
     p_deploy.add_argument("--gpu-count", "-c", type=int, default=None, help="GPU卡数，如 1/2/4/8")
+    p_deploy.add_argument("--region", "-r", default=None, help="区域关键词，如 广东/河南/河北")
     p_deploy.add_argument("--port", "-p", default="8080", help="暴露端口，多个用逗号分隔 (默认 8080)")
     p_deploy.add_argument("--points", type=int, default=1, help="节点数量 (默认 1)")
     p_deploy.add_argument("--env", default=None, help="环境变量")
