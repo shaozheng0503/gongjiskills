@@ -24,10 +24,11 @@ def _ok(res: dict) -> bool:
 
 
 def _fmt_price(raw) -> str:
-    """API 返回分，转为元"""
+    """API 价格单位是微元/秒，转为元/小时"""
     if raw is None:
         return "-"
-    return f"{raw / 100:.2f}"
+    yuan_per_hour = raw * 3600 / 1000000
+    return f"{yuan_per_hour:.2f}"
 
 
 def _fmt_mem(mb) -> str:
