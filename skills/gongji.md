@@ -9,7 +9,10 @@ TRIGGER: 用户提到"部署"、"发布任务"、"GPU"、"算力"、"共绩"、"
 ```bash
 gongji init --token <token>                              # 初始化
 gongji resources --json                                  # 查GPU资源
+gongji images --json                                     # 查镜像模板
+gongji images add vllm --image <addr> --gpu 4090 -p 8000  # 添加模板
 gongji deploy <image> -n <name> -g <gpu> -c <卡数> -p <port> --json  # 部署
+gongji deploy --template <name> -n <name> --json         # 用模板部署
 gongji list --json                                       # 列出任务+URL
 gongji status <id> --json                                # 任务详情
 gongji logs <id>                                         # 容器日志
@@ -24,6 +27,7 @@ gongji stop <id> -f                                      # 释放资源
 3. 错误也是 JSON: `{"error": "..."}`
 4. deploy **自动选最便宜的有库存资源**，用 `-c` 指定卡数
 5. 等待过程会显示实时事件，失败时自动输出原因
+6. `gongji images` 无需配置文件，可在 init 前使用
 
 ## 典型 Agent 工作流
 

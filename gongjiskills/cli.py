@@ -17,6 +17,53 @@ from .client import GongjiClient
 
 _json_mode = False
 
+# ── 内置镜像模板 ──────────────────────────────────────────────────────────────
+
+BUILTIN_TEMPLATES: dict[str, dict] = {
+    "ffmpeg": {
+        "image": "harbor.suanleme.cn/library/ffmpeg-api:cpu",
+        "port": "8080",
+        "description": "FFmpeg 媒体处理 API",
+    },
+}
+
+
+def _templates_path() -> Path:
+    return Path.home() / ".gongji" / "templates.json"
+
+
+def _load_templates() -> dict:
+    """加载模板：内置 + 用户自定义（用户覆盖内置）"""
+    templates = dict(BUILTIN_TEMPLATES)
+    path = _templates_path()
+    if path.exists():
+        try:
+            user = json.loads(path.read_text())
+            if isinstance(user, dict):
+                templates.update(user)
+        except Exception:
+            pass
+    return templates
+
+
+def _save_user_templates(user_templates: dict):
+    """只保存用户自定义部分"""
+    path = _templates_path()
+    path.write_text(json.dumps(user_templates, indent=2, ensure_ascii=False))
+    os.chmod(str(path), 0o600)
+
+
+def _get_user_templates() -> dict:
+    """加载仅用户自定义部分（不含内置）"""
+    path = _templates_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
 
 def _ok(res: dict) -> bool:
     code = str(res.get("code", ""))
@@ -281,6 +328,27 @@ def _find_cheapest(results: list, gpu_filter: str = None, gpu_count: int = None,
 
 def cmd_deploy(client: GongjiClient, args):
     """查资源 → 选最便宜的 → 创建任务 → 等待就绪 → 返回URL"""
+
+    # 0. 应用模板（如果指定）
+    if args.template:
+        templates = _load_templates()
+        if args.template not in templates:
+            _fail(f"模板 [{args.template}] 不存在，用 gongji images 查看可用模板")
+        tmpl = templates[args.template]
+        # 模板作为默认值，命令行参数优先
+        if not args.image:
+            args.image = tmpl.get("image")
+        if not args.gpu:
+            args.gpu = tmpl.get("gpu")
+        if args.port == "8080" and tmpl.get("port"):
+            args.port = tmpl["port"]
+        if not args.start_cmd and tmpl.get("start_cmd"):
+            args.start_cmd = tmpl["start_cmd"]
+        if not args.start_args and tmpl.get("start_args"):
+            args.start_args = tmpl["start_args"]
+
+    if not args.image:
+        _fail("缺少镜像地址，请指定 <image> 或 --template <名称>")
 
     # 1. 校验端口
     try:
@@ -599,6 +667,78 @@ def cmd_stop(client: GongjiClient, args):
     print(f"任务 {args.task_id} 已{action}")
 
 
+# ── images ──
+
+def cmd_images(args):
+    """管理镜像模板（无需 API 凭据）"""
+    subaction = getattr(args, "subaction", None)
+
+    if subaction == "add":
+        # gongji images add <name> --image <addr> [--gpu ...] [--port ...] [--desc ...]
+        user_tmpls = _get_user_templates()
+        entry = {
+            "image": args.image,
+        }
+        if args.gpu:
+            entry["gpu"] = args.gpu
+        if args.port:
+            entry["port"] = args.port
+        if args.desc:
+            entry["description"] = args.desc
+        if args.start_cmd:
+            entry["start_cmd"] = args.start_cmd
+        if args.start_args:
+            entry["start_args"] = args.start_args
+        user_tmpls[args.name] = entry
+        _save_user_templates(user_tmpls)
+        print(f"模板 [{args.name}] 已保存")
+        print(f"  镜像: {entry['image']}")
+        if entry.get("gpu"):
+            print(f"  GPU:  {entry['gpu']}")
+        if entry.get("port"):
+            print(f"  端口: {entry['port']}")
+        print(f"\n部署示例: gongji deploy --template {args.name} -n my-svc")
+        return
+
+    if subaction == "rm":
+        user_tmpls = _get_user_templates()
+        if args.name not in user_tmpls:
+            if args.name in BUILTIN_TEMPLATES:
+                _fail(f"[{args.name}] 是内置模板，不可删除")
+            else:
+                _fail(f"模板 [{args.name}] 不存在")
+        del user_tmpls[args.name]
+        _save_user_templates(user_tmpls)
+        print(f"模板 [{args.name}] 已删除")
+        return
+
+    # 默认：列出所有模板
+    templates = _load_templates()
+    user_tmpls = _get_user_templates()
+
+    if args.json:
+        _json_out(templates)
+
+    if not templates:
+        print("暂无模板，用 gongji images add <name> --image <addr> 添加")
+        return
+
+    print(f"{'名称':<16} {'镜像':<50} {'GPU':<8} {'端口':<6} 说明")
+    print("-" * 100)
+    for name, tmpl in templates.items():
+        tag = " [内置]" if name in BUILTIN_TEMPLATES and name not in user_tmpls else ""
+        img = tmpl.get("image", "-")
+        gpu = tmpl.get("gpu", "-")
+        port = tmpl.get("port", "-")
+        desc = tmpl.get("description", "")
+        print(f"{name + tag:<16} {img:<50} {gpu:<8} {port:<6} {desc}")
+
+    print(f"\n共 {len(templates)} 个模板")
+    print("  部署: gongji deploy --template <名称> -n <任务名>")
+    print("  添加: gongji images add <名称> --image <镜像地址>")
+    print("  删除: gongji images rm <名称>")
+
+
 # ── main ──
 
 def main():
@@ -620,7 +760,8 @@ def main():
 
     # deploy
     p_deploy = sub.add_parser("deploy", help="创建弹性部署任务")
-    p_deploy.add_argument("image", help="Docker 镜像地址")
+    p_deploy.add_argument("image", nargs="?", default=None, help="Docker 镜像地址（与 --template 二选一）")
+    p_deploy.add_argument("--template", "-t", default=None, help="使用镜像模板（见 gongji images）")
     p_deploy.add_argument("--name", "-n", required=True, help="任务名称")
     p_deploy.add_argument("--gpu", "-g", default=None, help="GPU型号关键词，如 4090/H800")
     p_deploy.add_argument("--gpu-count", "-c", type=int, default=None, help="GPU卡数，如 1/2/4/8")
@@ -648,6 +789,21 @@ def main():
     p_logs.add_argument("task_id", type=int, help="任务ID")
     p_logs.add_argument("--events", "-e", action="store_true", help="查看事件而非日志（排查启动失败）")
 
+    # images
+    p_img = sub.add_parser("images", help="管理镜像模板（无需配置文件）")
+    p_img.add_argument("--json", "-j", action="store_true", help="JSON格式输出")
+    img_sub = p_img.add_subparsers(dest="subaction")
+    p_img_add = img_sub.add_parser("add", help="添加镜像模板")
+    p_img_add.add_argument("name", help="模板名称，如 vllm / comfyui")
+    p_img_add.add_argument("--image", "-i", required=True, help="Docker 镜像地址")
+    p_img_add.add_argument("--gpu", "-g", default=None, help="推荐 GPU 型号，如 4090")
+    p_img_add.add_argument("--port", "-p", default=None, help="默认暴露端口")
+    p_img_add.add_argument("--desc", "-d", default=None, help="说明")
+    p_img_add.add_argument("--start-cmd", default=None, help="默认启动命令")
+    p_img_add.add_argument("--start-args", default=None, help="默认启动参数")
+    p_img_rm = img_sub.add_parser("rm", help="删除镜像模板")
+    p_img_rm.add_argument("name", help="模板名称")
+
     # stop
     p_stop = sub.add_parser("stop", help="停止/暂停/恢复任务")
     p_stop.add_argument("task_id", type=int, help="任务ID")
@@ -665,6 +821,11 @@ def main():
 
     if args.cmd == "init":
         cmd_init(args)
+        return
+
+    # images 命令不需要 API 凭据
+    if args.cmd == "images":
+        cmd_images(args)
         return
 
     try:

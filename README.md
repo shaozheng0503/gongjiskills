@@ -103,6 +103,35 @@ gongji resources --json   # JSON 输出
 有库存 14 种（共 44 种，用 --all 查看全部）
 ```
 
+### `images` — 镜像模板管理
+
+内置模板无需配置即可使用，也可添加自己或平台的预制镜像作为模板：
+
+```bash
+gongji images                        # 列出所有模板（内置 + 自定义）
+gongji images add vllm \
+  --image harbor.suanleme.cn/library/vllm:latest \
+  --gpu 4090 --port 8000 \
+  --desc "vLLM OpenAI 兼容推理"      # 添加模板
+gongji images rm vllm                # 删除自定义模板
+gongji images --json                 # JSON 输出
+```
+
+**输出：**
+
+```
+名称               镜像                                              GPU      端口   说明
+----------------------------------------------------------------------------------------------
+ffmpeg [内置]      harbor.suanleme.cn/library/ffmpeg-api:cpu        -        8080  FFmpeg 媒体处理 API
+vllm               harbor.suanleme.cn/library/vllm:latest           4090     8000  vLLM OpenAI 兼容推理
+
+共 2 个模板
+  部署: gongji deploy --template <名称> -n <任务名>
+  添加: gongji images add <名称> --image <镜像地址>
+```
+
+模板存储在 `~/.gongji/templates.json`（权限 600），内置模板不可删除。
+
 ### `deploy` — 部署任务
 
 自动查找有库存且**最便宜**的 GPU → 创建弹性部署 → 等待就绪 → 返回访问地址。
@@ -111,19 +140,24 @@ gongji resources --json   # JSON 输出
 
 ```bash
 gongji deploy <镜像地址> -n <任务名> -g <GPU型号> -p <端口>
+gongji deploy --template <模板名> -n <任务名>     # 用模板部署（无需记镜像地址）
 ```
 
 **示例：**
 
 ```bash
-# 部署推理服务到 4090 单卡
+# 直接指定镜像
 gongji deploy my-registry/vllm:latest -n my-llm -g 4090 -p 8080
 
-# 指定 4 卡 + 指定广东区域（就近部署，减少延迟）
-gongji deploy my-registry/vllm:latest -n my-llm -g 4090 -c 4 -r 广东 -p 8080
+# 用模板部署（GPU/端口从模板继承，可命令行覆盖）
+gongji images add vllm --image harbor.suanleme.cn/library/vllm:latest --gpu 4090 --port 8000
+gongji deploy --template vllm -n my-llm
+
+# 模板 + 覆盖 GPU 卡数
+gongji deploy --template vllm -n my-llm -c 4 -r 广东
 
 # Agent 调用（JSON 输出）
-gongji deploy my-registry/vllm:latest -n my-llm -g 4090 -p 8080 --json
+gongji deploy --template vllm -n my-llm --json
 ```
 
 **输出：**
@@ -153,9 +187,10 @@ curl https://deployment-452-xxx-8080.550w.link/v1/chat/completions \
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `<image>` | Docker 镜像地址（必填） | - |
+| `<image>` | Docker 镜像地址（与 `--template` 二选一） | - |
+| `--template, -t` | 镜像模板名称（见 `gongji images`） | - |
 | `-n, --name` | 任务名称（必填） | - |
-| `-g, --gpu` | GPU 型号关键词，如 `4090` / `H800` | 自动选最便宜 |
+| `-g, --gpu` | GPU 型号关键词，如 `4090` / `H800`（覆盖模板） | 自动选最便宜 |
 | `-c, --gpu-count` | GPU 卡数，如 `1` / `4` / `8` | 不限 |
 | `-r, --region` | 区域关键词，如 `广东` / `河南` / `河北` | 不限 |
 | `-p, --port` | 暴露端口，多个用逗号分隔 | `8080` |
@@ -316,7 +351,7 @@ gongjiskills/
 │   ├── __init__.py        # from gongjiskills import GongjiClient
 │   ├── auth.py            # RSA-SHA256 签名 + 权限检查
 │   ├── client.py          # API 客户端 + 网络错误处理
-│   └── cli.py             # CLI 实现（7 个命令）
+│   └── cli.py             # CLI 实现（8 个命令）
 ├── tests/                  # 23 个测试
 │   ├── test_cli.py        # CLI 参数解析 + JSON 输出契约
 │   └── test_auth.py       # 签名验证 + 配置加载
