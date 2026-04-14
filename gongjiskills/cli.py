@@ -53,6 +53,59 @@ def _json_out(data):
     sys.exit(0)
 
 
+def _get_latest_event(client, task_id: int) -> str:
+    """获取任务最新事件的简短描述"""
+    try:
+        points_res = client.list_points(task_id)
+        if not _ok(points_res):
+            return ""
+        points = points_res.get("data", {}).get("results", [])
+        if not points:
+            return ""
+        point_id = points[0].get("point_id")
+        ev_res = client.pod_event(point_id)
+        if not _ok(ev_res):
+            return ""
+        events = ev_res.get("data", {}).get("events", [])
+        if not events:
+            return ""
+        ev = events[0]
+        return f"[{ev.get('reason', '')}] {ev.get('message', '')}"
+    except Exception:
+        return ""
+
+
+def _get_fail_reason(client, task_id: int) -> str:
+    """获取任务失败原因"""
+    try:
+        points_res = client.list_points(task_id, status="Failed")
+        if not _ok(points_res):
+            return ""
+        points = points_res.get("data", {}).get("results", [])
+        if not points:
+            # 尝试查所有节点
+            points_res = client.list_points(task_id)
+            if not _ok(points_res):
+                return ""
+            points = points_res.get("data", {}).get("results", [])
+        if not points:
+            return ""
+        point_id = points[0].get("point_id")
+        ev_res = client.pod_event(point_id)
+        if not _ok(ev_res):
+            return ""
+        events = ev_res.get("data", {}).get("events", [])
+        # 找 Warning 类型事件
+        for ev in events:
+            if ev.get("type") == "Warning":
+                return f"{ev.get('reason', '')}: {ev.get('message', '')}"
+        if events:
+            return f"{events[0].get('reason', '')}: {events[0].get('message', '')}"
+        return ""
+    except Exception:
+        return ""
+
+
 def _get_urls(data: dict) -> list:
     """从任务数据中提取所有访问 URL"""
     urls = []
@@ -293,11 +346,12 @@ def cmd_deploy(client: GongjiClient, args):
     if not args.json:
         print(f"任务已创建, task_id={task_id}")
 
-    # 5. 等待就绪
+    # 5. 等待就绪（显示实时事件）
     if not args.no_wait:
         if not args.json:
-            print("等待任务启动", end="", flush=True)
+            print("等待任务启动...")
         retries = 0
+        last_event = ""
         for _ in range(60):
             time.sleep(5)
             try:
@@ -306,38 +360,43 @@ def cmd_deploy(client: GongjiClient, args):
             except Exception:
                 retries += 1
                 if retries >= 3:
-                    if not args.json:
-                        print()
-                    _fail(f"连续查询失败，请手动查询: python3 gongji.py status {task_id}")
-                if not args.json:
-                    print("!", end="", flush=True)
+                    _fail(f"连续查询失败，请手动查询: gongji status {task_id}")
                 continue
 
             data = detail.get("data") or {}
             status = data.get("status", "")
+
             if status == "Running":
                 urls = _get_urls(data)
                 if args.json:
                     _json_out({"task_id": task_id, "status": "Running", "urls": urls})
-                print(" Running!")
+                print("Running!")
                 for u in urls:
                     print(f"访问地址: {u['url']} (端口 {u['port']})")
                 return
-            if status in ("End", "Other"):
-                if not args.json:
-                    print()
-                _fail(f"任务异常终止, status={status}")
-            if not args.json:
-                print(".", end="", flush=True)
 
-        if not args.json:
-            print()
-        _fail(f"等待超时，请手动查询: python3 gongji.py status {task_id}")
+            if status in ("End", "Other"):
+                # 自动拉事件，告诉用户失败原因
+                reason = _get_fail_reason(client, task_id)
+                msg = f"任务异常终止 (status={status})"
+                if reason:
+                    msg += f"\n原因: {reason}"
+                _fail(msg)
+
+            # 显示最新事件（不重复）
+            if not args.json:
+                event = _get_latest_event(client, task_id)
+                if event and event != last_event:
+                    print(f"  {event}")
+                    last_event = event
+
+        _fail(f"等待超时 (5分钟)，请查询: gongji status {task_id}")
 
     # --no-wait 模式
     if args.json:
         _json_out({"task_id": task_id, "status": "Pending"})
-    print(json.dumps({"task_id": task_id}, ensure_ascii=False))
+    else:
+        print(json.dumps({"task_id": task_id}, ensure_ascii=False))
 
 
 # ── list ──

@@ -7,61 +7,57 @@ TRIGGER: 用户提到"部署"、"发布任务"、"GPU"、"算力"、"共绩"、"
 ## 命令速查
 
 ```bash
-python3 gongji.py init --token <token>       # 初始化（非交互，Agent用）
-python3 gongji.py resources --json            # 查GPU资源（JSON）
-python3 gongji.py deploy <image> -n <name> -g <gpu> -p <port> --json  # 部署（JSON返回URL）
-python3 gongji.py list --json                 # 列出任务+URL（JSON）
-python3 gongji.py status <id> --json          # 任务详情（JSON）
-python3 gongji.py logs <id>                   # 查看日志
-python3 gongji.py logs <id> --events          # 查看事件（排查启动失败）
-python3 gongji.py stop <id> -f                # 释放资源
+gongji init --token <token>                              # 初始化
+gongji resources --json                                  # 查GPU资源
+gongji deploy <image> -n <name> -g <gpu> -c <卡数> -p <port> --json  # 部署
+gongji list --json                                       # 列出任务+URL
+gongji status <id> --json                                # 任务详情
+gongji logs <id>                                         # 容器日志
+gongji logs <id> --events                                # 事件（排查失败）
+gongji stop <id> -f                                      # 释放资源
 ```
 
 ## Agent 调用关键点
 
-1. **用 `--json` 获取结构化输出**，不要解析人类可读文本
-2. deploy 返回 `{"task_id": 388, "status": "Running", "urls": [{"url": "https://...", "port": 8080}]}`
-3. list 返回 `[{"task_id": 388, "task_name": "...", "status": "...", "urls": [...]}]`
-4. deploy **自动选最便宜的有库存资源**
-5. 部署失败时用 `logs <id> --events` 查原因
+1. **必须用 `--json`** 获取结构化输出
+2. deploy 返回 `{"task_id": N, "status": "Running", "urls": [{"url": "https://...", "port": 8080}]}`
+3. 错误也是 JSON: `{"error": "..."}`
+4. deploy **自动选最便宜的有库存资源**，用 `-c` 指定卡数
+5. 等待过程会显示实时事件，失败时自动输出原因
 
 ## 典型 Agent 工作流
 
 ```bash
 # 1. 部署，拿到URL
-python3 gongji.py deploy my-registry/vllm:latest -n my-llm -g 4090 -p 8080 --json
-# 输出: {"task_id": 388, "status": "Running", "urls": [{"url": "https://xxx:8080", "port": 8080}]}
+gongji deploy my-registry/vllm:latest -n my-llm -g 4090 -p 8080 --json
 
 # 2. 用URL调推理API
-# curl https://xxx:8080/v1/chat/completions ...
+# curl https://xxx/v1/chat/completions ...
 
 # 3. 出问题查日志
-python3 gongji.py logs 388
-python3 gongji.py logs 388 --events
+gongji logs <id> --events
 
 # 4. 用完释放
-python3 gongji.py stop 388 -f
+gongji stop <id> -f --json
 ```
 
-## deploy 参数
+## deploy 全部参数
 
-```bash
-python3 gongji.py deploy <image> \
-  -n <name>             # 任务名（必填）
-  -g <gpu>              # GPU型号: 4090/H800（可选）
-  -p <port>             # 端口（默认8080）
-  --points <N>          # 节点数（默认1）
-  --env <env>           # 环境变量
-  --start-cmd <cmd>     # 启动命令
-  --start-args "<args>" # 启动参数
-  --no-wait             # 不等待就绪
-  --json                # JSON输出
-```
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `<image>` | Docker 镜像地址 | 必填 |
+| `-n` | 任务名 | 必填 |
+| `-g` | GPU 型号: 4090/H800 | 自动选最便宜 |
+| `-c` | GPU 卡数: 1/2/4/8 | 不限 |
+| `-p` | 端口 | 8080 |
+| `--points` | 节点数 | 1 |
+| `--env` | 环境变量 | - |
+| `--start-cmd` | 启动命令 | - |
+| `--start-args` | 启动参数（引号包裹） | - |
+| `--no-wait` | 不等待就绪 | - |
+| `--json` | JSON 输出 | - |
 
 ## 前置条件
 
-如果配置不存在，运行:
-```bash
-python3 gongji.py init --token <your-token>
-```
+配置不存在时运行: `gongji init --token <your-token>`
 或引导用户: https://www.gongjiyun.com → 头像 → API密钥 → RSA模式
