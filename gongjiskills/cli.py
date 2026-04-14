@@ -128,6 +128,7 @@ def cmd_init(args):
 
     print("=== 共绩算力 CLI 初始化 ===\n")
     gongji_dir.mkdir(exist_ok=True)
+    os.chmod(str(gongji_dir), 0o700)  # 仅当前用户可访问
 
     # 1. 生成密钥
     if key_path.exists() and not args.force:
@@ -139,6 +140,7 @@ def cmd_init(args):
         subprocess.run(["openssl", "rsa", "-pubout", "-in", str(key_path), "-out", str(pub_path)],
                        check=True, capture_output=True)
         os.chmod(str(key_path), 0o600)
+        os.chmod(str(pub_path), 0o644)
         print(f"  私钥: {key_path}")
         print(f"  公钥: {pub_path}")
 
@@ -149,11 +151,12 @@ def cmd_init(args):
         print(pub_path.read_text().strip())
         print("-" * 50)
 
-    # 3. Token（支持 --token 非交互模式）
+    # 3. Token（多种安全传入方式）
     if config_path.exists() and not args.force:
         print(f"\n配置已存在: {config_path}（跳过，用 --force 覆盖）")
     else:
-        token = args.token
+        # 优先级: --token 参数 > GONGJI_TOKEN 环境变量 > 交互输入
+        token = args.token or os.environ.get("GONGJI_TOKEN")
         if not token:
             print("\n登录 https://www.gongjiyun.com → 头像 → API密钥")
             print("新建密钥（RSA模式），上传公钥后获取 Token\n")
@@ -162,6 +165,7 @@ def cmd_init(args):
             _fail("Token 不能为空")
         config = {"token": token, "private_key_path": str(key_path)}
         config_path.write_text(json.dumps(config, indent=2, ensure_ascii=False))
+        os.chmod(str(config_path), 0o600)  # 仅当前用户可读写
         print(f"配置已写入: {config_path}")
 
     # 4. 验证

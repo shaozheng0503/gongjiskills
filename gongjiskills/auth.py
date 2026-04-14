@@ -18,6 +18,18 @@ def load_config() -> dict:
             "请先创建配置文件，格式:\n"
             '{"token": "your-token", "private_key_path": "~/.gongji/private.key"}'
         )
+    # 检查文件权限，过于宽松时警告
+    try:
+        mode = config_path.stat().st_mode & 0o777
+        if mode & 0o077:  # 其他用户/组可读
+            import sys
+            print(
+                f"警告: {config_path} 权限过宽 ({oct(mode)})，"
+                f"建议运行: chmod 600 {config_path}",
+                file=sys.stderr,
+            )
+    except OSError:
+        pass
     try:
         with open(config_path) as f:
             config = json.load(f)
@@ -40,6 +52,17 @@ def load_private_key(config: dict):
     key_path = Path(os.path.expanduser(config["private_key_path"]))
     if not key_path.exists():
         raise FileNotFoundError(f"私钥文件不存在: {key_path}")
+    try:
+        mode = key_path.stat().st_mode & 0o777
+        if mode & 0o077:
+            import sys
+            print(
+                f"警告: 私钥 {key_path} 权限过宽 ({oct(mode)})，"
+                f"建议运行: chmod 600 {key_path}",
+                file=sys.stderr,
+            )
+    except OSError:
+        pass
     with open(key_path, "rb") as f:
         private_key = serialization.load_pem_private_key(f.read(), password=None)
     return private_key
