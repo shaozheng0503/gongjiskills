@@ -12,7 +12,7 @@ from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
-from .client import GongjiClient
+from .client import GongjiClient, _friendly_error
 
 
 _json_mode = False
@@ -20,10 +20,62 @@ _json_mode = False
 # ── 内置镜像模板 ──────────────────────────────────────────────────────────────
 
 BUILTIN_TEMPLATES: dict[str, dict] = {
+    # 平台官方镜像
     "ffmpeg": {
         "image": "harbor.suanleme.cn/library/ffmpeg-api:cpu",
         "port": "8080",
-        "description": "FFmpeg 媒体处理 API",
+        "description": "FFmpeg 媒体处理 API（CPU）",
+    },
+    # LLM 推理
+    "vllm": {
+        "image": "vllm/vllm-openai:latest",
+        "gpu": "4090",
+        "port": "8000",
+        "description": "vLLM OpenAI 兼容推理服务",
+    },
+    "ollama": {
+        "image": "ollama/ollama:latest",
+        "gpu": "4090",
+        "port": "11434",
+        "description": "Ollama 一键 LLM 服务",
+    },
+    "tgi": {
+        "image": "ghcr.io/huggingface/text-generation-inference:latest",
+        "gpu": "4090",
+        "port": "80",
+        "description": "HuggingFace TGI 推理",
+    },
+    "xinference": {
+        "image": "xprobe/xinference:latest",
+        "gpu": "4090",
+        "port": "9997",
+        "description": "Xorbits Inference 多模型推理",
+    },
+    # 图像生成
+    "comfyui": {
+        "image": "ghcr.io/ai-dock/comfyui:latest-cuda",
+        "gpu": "4090",
+        "port": "8188",
+        "description": "ComfyUI 节点式图像生成",
+    },
+    "sd-webui": {
+        "image": "ghcr.io/ai-dock/stable-diffusion-webui:latest-cuda",
+        "gpu": "4090",
+        "port": "7860",
+        "description": "Stable Diffusion Automatic1111 WebUI",
+    },
+    # 开发 / 训练
+    "jupyter": {
+        "image": "jupyter/datascience-notebook:latest",
+        "gpu": "4090",
+        "port": "8888",
+        "description": "Jupyter 数据科学 Notebook",
+    },
+    "pytorch": {
+        "image": "pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime",
+        "gpu": "4090",
+        "port": "8888",
+        "description": "PyTorch 训练基础环境",
     },
 }
 
@@ -88,10 +140,13 @@ def _fmt_mem(mb) -> str:
 
 def _fail(msg: str):
     sys.stdout.flush()
+    friendly = _friendly_error(str(msg))
     if _json_mode:
-        print(json.dumps({"error": msg}, ensure_ascii=False))
+        # JSON 模式下只输出主错误信息（不附修复提示，避免破坏结构）
+        primary = friendly.split("\n")[0]
+        print(json.dumps({"error": primary}, ensure_ascii=False))
         sys.exit(1)
-    print(f"错误: {msg}", file=sys.stderr)
+    print(f"错误: {friendly}", file=sys.stderr)
     sys.exit(1)
 
 
@@ -151,6 +206,39 @@ def _get_fail_reason(client, task_id: int) -> str:
         return ""
     except Exception:
         return ""
+
+
+def _schedule_auto_release(task_id: int, ttl_seconds: int) -> int:
+    """在后台启动一个独立进程，ttl 到期后自动 stop_task；返回子进程 PID"""
+    log_dir = Path.home() / ".gongji" / "ttl"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"{task_id}.log"
+
+    # 子进程代码：sleep 后调用 API 释放任务
+    code = (
+        "import time, sys, json\n"
+        f"time.sleep({int(ttl_seconds)})\n"
+        "try:\n"
+        "    from gongjiskills.client import GongjiClient\n"
+        "    client = GongjiClient()\n"
+        f"    res = client.stop_task({int(task_id)})\n"
+        "    print(json.dumps(res, ensure_ascii=False))\n"
+        "except Exception as e:\n"
+        "    print(f'auto-release failed: {e}')\n"
+        "    sys.exit(1)\n"
+    )
+
+    with open(log_file, "ab") as fp:
+        proc = subprocess.Popen(
+            [sys.executable, "-c", code],
+            stdout=fp, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+    # 记录 pid，便于用户手动取消
+    pid_file = log_dir / f"{task_id}.pid"
+    pid_file.write_text(str(proc.pid))
+    return proc.pid
 
 
 def _get_urls(data: dict) -> list:
@@ -236,6 +324,31 @@ def cmd_init(args):
 
 # ── resources ──
 
+def _merge_resources(results: list) -> list:
+    """按 (gpu_name, gpu_count, gpu_memory) 合并重复项，区域累积到同一 SKU 下"""
+    merged: dict = {}
+    for device in results:
+        key = (
+            device.get("gpu_name", "?"),
+            device.get("gpu_count", 0),
+            device.get("gpu_memory", 0),
+            device.get("cpu_cores", 0),
+            device.get("memory", 0),
+        )
+        if key not in merged:
+            merged[key] = dict(device)
+            merged[key]["regions"] = list(device.get("regions", []))
+        else:
+            existing_ids = {(r.get("region"), r.get("mark", {}).get("mark"))
+                            for r in merged[key]["regions"]}
+            for r in device.get("regions", []):
+                rid = (r.get("region"), r.get("mark", {}).get("mark"))
+                if rid not in existing_ids:
+                    merged[key]["regions"].append(r)
+                    existing_ids.add(rid)
+    return list(merged.values())
+
+
 def cmd_resources(client: GongjiClient, args):
     """查看可用 GPU 资源"""
     res = client.search_resources()
@@ -246,6 +359,15 @@ def cmd_resources(client: GongjiClient, args):
     if not results:
         print("当前无可用 GPU 资源")
         return
+
+    # 合并重复 SKU
+    results = _merge_resources(results)
+
+    # 筛选：按 GPU 型号
+    gpu_filter = getattr(args, "gpu", None)
+    region_filter = getattr(args, "region", None)
+    if gpu_filter:
+        results = [d for d in results if gpu_filter.lower() in d.get("gpu_name", "").lower()]
 
     if args.json:
         _json_out(results)
@@ -271,24 +393,40 @@ def cmd_resources(client: GongjiClient, args):
         regions = device.get("regions", [])
         if not show_all:
             regions = [r for r in regions if r.get("inventory", 0) > 0]
+        if region_filter:
+            regions = [
+                r for r in regions
+                if region_filter.lower() in r.get("region_name", "").lower()
+                or region_filter.lower() in str(r.get("region", "")).lower()
+            ]
         if not regions:
             continue
 
         shown += 1
         print(f"\n{gpu} x{gpu_count}  (显存 {gpu_mem}G | {cpu}核 | {mem}G)")
-        print(f"  {'区域':<12} {'库存':<6} {'单价(元/h)':<12} {'折扣价(元/h)':<12}")
-        print(f"  {'-'*46}")
+        print(f"  {'区域':<14} {'库存':>6}  {'单价':>10}  {'折扣价':>10}")
+        print(f"  {'-'*48}")
 
+        # 区域内也按折扣价排序
+        regions = sorted(regions,
+                         key=lambda r: r.get("discount_price") or r.get("price") or float("inf"))
         for r in regions:
             region_name = r.get("region_name", "?")
             inventory = r.get("inventory", 0)
             price = _fmt_price(r.get("price"))
             discount = _fmt_price(r.get("discount_price"))
             stock_mark = "" if inventory > 0 else " (售罄)"
-            print(f"  {region_name:<12} {inventory:<6} {price:<12} {discount:<12}{stock_mark}")
+            print(f"  {region_name:<14} {inventory:>6}  {price:>8}元/h  {discount:>8}元/h{stock_mark}")
 
-    total = res.get("data", {}).get("count", 0)
-    if show_all:
+    total = len(results)
+    if gpu_filter or region_filter:
+        filt = []
+        if gpu_filter:
+            filt.append(f"GPU={gpu_filter}")
+        if region_filter:
+            filt.append(f"区域={region_filter}")
+        print(f"\n匹配 {shown} 种规格 ({' '.join(filt)})")
+    elif show_all:
         print(f"\n共 {total} 种规格")
     else:
         print(f"\n有库存 {shown} 种（共 {total} 种，用 --all 查看全部）")
@@ -425,6 +563,19 @@ def cmd_deploy(client: GongjiClient, args):
     if not args.json:
         print(f"任务已创建, task_id={task_id}")
 
+    # 自动释放调度（--ttl）
+    ttl_pid = None
+    if args.ttl and args.ttl > 0:
+        try:
+            ttl_pid = _schedule_auto_release(task_id, args.ttl)
+            if not args.json:
+                mins = args.ttl / 60
+                print(f"已启用自动释放: {args.ttl}s (~{mins:.1f}分钟) 后停止 (pid={ttl_pid})")
+                print(f"  取消: kill {ttl_pid}")
+        except Exception as e:
+            if not args.json:
+                print(f"警告: 自动释放调度失败: {e}")
+
     # 5. 等待就绪（显示实时事件）
     if not args.no_wait:
         if not args.json:
@@ -448,7 +599,11 @@ def cmd_deploy(client: GongjiClient, args):
             if status == "Running":
                 urls = _get_urls(data)
                 if args.json:
-                    _json_out({"task_id": task_id, "status": "Running", "urls": urls})
+                    out = {"task_id": task_id, "status": "Running", "urls": urls}
+                    if ttl_pid:
+                        out["ttl_seconds"] = args.ttl
+                        out["auto_release_pid"] = ttl_pid
+                    _json_out(out)
                 print("Running!")
                 for u in urls:
                     print(f"访问地址: {u['url']} (端口 {u['port']})")
@@ -473,7 +628,11 @@ def cmd_deploy(client: GongjiClient, args):
 
     # --no-wait 模式
     if args.json:
-        _json_out({"task_id": task_id, "status": "Pending"})
+        out = {"task_id": task_id, "status": "Pending"}
+        if ttl_pid:
+            out["ttl_seconds"] = args.ttl
+            out["auto_release_pid"] = ttl_pid
+        _json_out(out)
     else:
         print(json.dumps({"task_id": task_id}, ensure_ascii=False))
 
@@ -637,8 +796,63 @@ def cmd_logs(client: GongjiClient, args):
 
 # ── stop ──
 
+def _stop_all(client: GongjiClient, args):
+    """批量删除当前运行/待启动的任务"""
+    res = client.search_tasks(status="Running,Pending,Paused")
+    if not _ok(res):
+        _fail(f"查询任务失败: {res.get('message', res)}")
+
+    tasks = res.get("data", {}).get("results", [])
+    if not tasks:
+        if args.json:
+            _json_out({"stopped": [], "failed": []})
+        print("当前没有运行中的任务")
+        return
+
+    if not args.force and not args.json:
+        print(f"即将删除以下 {len(tasks)} 个任务（不可恢复）:")
+        for t in tasks:
+            print(f"  [{t.get('task_id')}] {t.get('task_name')}  {t.get('status')}")
+        confirm = input("继续？(y/N): ")
+        if confirm.lower() != "y":
+            print("已取消")
+            return
+
+    stopped, failed = [], []
+    for t in tasks:
+        tid = t.get("task_id")
+        try:
+            r = client.stop_task(tid)
+            if _ok(r):
+                stopped.append(tid)
+                if not args.json:
+                    print(f"  ✓ 已删除 {tid}")
+            else:
+                failed.append({"task_id": tid, "error": r.get("message", "未知错误")})
+                if not args.json:
+                    print(f"  ✗ {tid} 失败: {r.get('message', '')}")
+        except Exception as e:
+            failed.append({"task_id": tid, "error": str(e)})
+            if not args.json:
+                print(f"  ✗ {tid} 异常: {e}")
+
+    if args.json:
+        _json_out({"stopped": stopped, "failed": failed})
+    print(f"\n完成: 成功 {len(stopped)} 个，失败 {len(failed)} 个")
+
+
 def cmd_stop(client: GongjiClient, args):
     """停止/暂停/恢复任务"""
+    # 批量释放
+    if getattr(args, "all", False):
+        if args.action:
+            _fail("--all 不能与 --pause/--resume 同时使用")
+        _stop_all(client, args)
+        return
+
+    if args.task_id is None:
+        _fail("请指定 task_id，或用 --all 批量删除")
+
     if args.action == "pause":
         print(f"正在暂停任务 {args.task_id}（资源将释放，可恢复）...")
         res = client.pause_task(args.task_id)
@@ -723,21 +937,30 @@ def cmd_images(args):
         print("暂无模板，用 gongji images add <name> --image <addr> 添加")
         return
 
-    print(f"{'名称':<16} {'镜像':<50} {'GPU':<8} {'端口':<6} 说明")
-    print("-" * 100)
-    for name, tmpl in templates.items():
-        tag = " [内置]" if name in BUILTIN_TEMPLATES and name not in user_tmpls else ""
-        img = tmpl.get("image", "-")
-        gpu = tmpl.get("gpu", "-")
-        port = tmpl.get("port", "-")
-        desc = tmpl.get("description", "")
-        print(f"{name + tag:<16} {img:<50} {gpu:<8} {port:<6} {desc}")
+    # 按内置/自定义分组展示
+    builtin = [(n, t) for n, t in templates.items() if n in BUILTIN_TEMPLATES and n not in user_tmpls]
+    custom = [(n, t) for n, t in templates.items() if n in user_tmpls]
 
-    print(f"\n共 {len(templates)} 个模板")
+    def _print_group(title: str, items: list):
+        if not items:
+            return
+        print(f"\n{title}")
+        print(f"  {'名称':<14} {'推荐GPU':<8} {'端口':<6} 说明")
+        print(f"  {'-'*70}")
+        for name, tmpl in items:
+            gpu = tmpl.get("gpu", "-")
+            port = tmpl.get("port", "-")
+            desc = tmpl.get("description", "") or tmpl.get("image", "")
+            print(f"  {name:<14} {gpu:<8} {port:<6} {desc}")
+
+    _print_group("【内置模板】（开箱即用）", builtin)
+    _print_group("【自定义模板】", custom)
+
+    print(f"\n共 {len(templates)} 个模板 (内置 {len(builtin)} + 自定义 {len(custom)})")
     print("  部署: gongji deploy --template <名称> -n <任务名>")
+    print("  查看详情: gongji images --json")
     print("  添加: gongji images add <名称> --image <镜像地址>")
     print("  删除: gongji images rm <名称>")
-
 
 # ── main ──
 
@@ -756,6 +979,8 @@ def main():
     # resources
     p_res = sub.add_parser("resources", help="查看可用 GPU 资源和价格")
     p_res.add_argument("--all", "-a", action="store_true", help="显示全部（含售罄）")
+    p_res.add_argument("--gpu", "-g", default=None, help="按GPU型号筛选，如 4090/H800")
+    p_res.add_argument("--region", "-r", default=None, help="按区域筛选，如 广东/河北")
     p_res.add_argument("--json", "-j", action="store_true", help="JSON格式输出")
 
     # deploy
@@ -772,6 +997,8 @@ def main():
     p_deploy.add_argument("--start-cmd", default=None, help="容器启动命令")
     p_deploy.add_argument("--start-args", default=None, help="容器启动参数（引号包裹）")
     p_deploy.add_argument("--no-wait", action="store_true", help="不等待任务就绪")
+    p_deploy.add_argument("--ttl", type=int, default=None,
+                          help="TTL 秒数，到期自动释放任务（防止忘记 stop 烧钱）")
     p_deploy.add_argument("--json", "-j", action="store_true", help="JSON格式输出（供Agent解析）")
 
     # list
@@ -805,8 +1032,9 @@ def main():
     p_img_rm.add_argument("name", help="模板名称")
 
     # stop
-    p_stop = sub.add_parser("stop", help="停止/暂停/恢复任务")
-    p_stop.add_argument("task_id", type=int, help="任务ID")
+    p_stop = sub.add_parser("stop", help="停止/暂停/恢复任务（支持 --all 批量）")
+    p_stop.add_argument("task_id", type=int, nargs="?", default=None, help="任务ID（与 --all 二选一）")
+    p_stop.add_argument("--all", action="store_true", help="批量删除所有运行/待启动/暂停的任务")
     action_group = p_stop.add_mutually_exclusive_group()
     action_group.add_argument("--pause", dest="action", action="store_const", const="pause", help="暂停（可恢复）")
     action_group.add_argument("--resume", dest="action", action="store_const", const="resume", help="恢复暂停的任务")

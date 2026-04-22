@@ -123,6 +123,104 @@ def test_no_urllib3_warning():
     assert "Warning" not in err
 
 
+# ── 新增测试：优化项 ──
+
+def test_resources_has_filter_flags():
+    """resources 支持 --gpu / --region 筛选"""
+    out, _, rc = run(["resources", "--help"])
+    assert rc == 0
+    assert "--gpu" in out
+    assert "--region" in out
+
+
+def test_deploy_has_ttl_flag():
+    """deploy 支持 --ttl 自动释放"""
+    out, _, rc = run(["deploy", "--help"])
+    assert rc == 0
+    assert "--ttl" in out
+
+
+def test_stop_has_all_flag():
+    """stop 支持 --all 批量释放"""
+    out, _, rc = run(["stop", "--help"])
+    assert rc == 0
+    assert "--all" in out
+
+
+def test_stop_no_task_id_no_all_fails():
+    """stop 不加 task_id 也不加 --all 应报错"""
+    out, err, rc = run(["stop", "--json"])
+    assert rc == 1
+    data = json.loads(out)
+    assert "error" in data
+
+
+def test_merge_resources_dedup():
+    """_merge_resources 能合并相同 GPU+卡数+显存 的重复项"""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from gongjiskills.cli import _merge_resources
+    raw = [
+        {"gpu_name": "4090", "gpu_count": 1, "gpu_memory": 24576,
+         "cpu_cores": 16, "memory": 64512,
+         "regions": [{"region": "gz", "region_name": "广东一区",
+                      "mark": {"mark": "A"}, "inventory": 10}]},
+        {"gpu_name": "4090", "gpu_count": 1, "gpu_memory": 24576,
+         "cpu_cores": 16, "memory": 64512,
+         "regions": [{"region": "hb", "region_name": "河北六区",
+                      "mark": {"mark": "B"}, "inventory": 20}]},
+        {"gpu_name": "5090", "gpu_count": 1, "gpu_memory": 32768,
+         "cpu_cores": 48, "memory": 64512,
+         "regions": [{"region": "ah", "region_name": "安徽一区",
+                      "mark": {"mark": "C"}, "inventory": 5}]},
+    ]
+    merged = _merge_resources(raw)
+    assert len(merged) == 2, "4090 两个条目应合并为 1 个"
+    four = [d for d in merged if d["gpu_name"] == "4090"][0]
+    assert len(four["regions"]) == 2
+    region_names = {r["region_name"] for r in four["regions"]}
+    assert region_names == {"广东一区", "河北六区"}
+
+
+def test_builtin_templates_expanded():
+    """内置模板应包含常用 AI 镜像"""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from gongjiskills.cli import BUILTIN_TEMPLATES
+    must_have = {"vllm", "ollama", "comfyui", "sd-webui", "jupyter", "ffmpeg"}
+    assert must_have.issubset(set(BUILTIN_TEMPLATES.keys())), \
+        f"缺少模板: {must_have - set(BUILTIN_TEMPLATES.keys())}"
+    # 每个模板至少要有 image 字段
+    for name, t in BUILTIN_TEMPLATES.items():
+        assert "image" in t, f"模板 {name} 缺 image"
+
+
+def test_images_command_shows_builtin():
+    """gongji images 无 API 凭据也能显示内置模板"""
+    out, _, rc = run(["images"])
+    # images 命令不需要配置文件，直接成功
+    assert rc == 0
+    assert "vllm" in out
+    assert "comfyui" in out
+
+
+def test_images_json_is_valid():
+    out, _, rc = run(["images", "--json"])
+    assert rc == 0
+    data = json.loads(out)
+    assert isinstance(data, dict)
+    assert "vllm" in data
+
+
+def test_friendly_error_mapping():
+    """_friendly_error 应识别常见错误并给出建议"""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from gongjiskills.client import _friendly_error
+    assert "gongji init --force" in _friendly_error("token expired")
+    assert "公钥" in _friendly_error("invalid signature")
+    assert "充值" in _friendly_error("insufficient balance")
+    # 未识别的原样返回
+    assert _friendly_error("random error") == "random error"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     passed = 0

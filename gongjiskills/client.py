@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from urllib.parse import urlencode
 
 import requests
@@ -14,13 +15,40 @@ class GongjiError(Exception):
     """共绩算力 API 错误"""
 
 
+# 瞬时错误自动重试的状态码
+_RETRY_STATUS = {500, 502, 503, 504}
+
+
+def _friendly_error(msg: str) -> str:
+    """把常见 API 错误映射为带修复建议的中文提示"""
+    m = (msg or "").lower()
+    if "token" in m and ("expired" in m or "invalid" in m):
+        return f"{msg}\n  → Token 已失效，请登录 https://www.gongjiyun.com 重新生成，再运行: gongji init --force"
+    if "signature" in m or "sign" in m:
+        return f"{msg}\n  → 签名验证失败：公钥可能未上传到控制台，检查 ~/.gongji/public.pem 是否与平台一致"
+    if "not found" in m or "不存在" in m:
+        return f"{msg}\n  → 资源不存在，用 gongji list 确认 task_id 是否正确"
+    if "insufficient" in m or "余额" in m or "欠费" in m:
+        return f"{msg}\n  → 账户余额不足，请前往控制台充值后重试"
+    if "inventory" in m or "库存" in m or "sold out" in m:
+        return f"{msg}\n  → 库存不足，换个区域或 GPU 型号重试（gongji resources 查看库存）"
+    return msg
+
+
 class GongjiClient:
     """共绩算力 Open API 客户端（RSA签名模式）"""
 
-    def __init__(self):
+    def __init__(self, max_retries: int = 2, retry_backoff: float = 1.0):
         self.config = load_config()
         self.private_key = load_private_key(self.config)
         self.base_url = self.config["base_url"].rstrip("/")
+        self.max_retries = max_retries
+        self.retry_backoff = retry_backoff
+
+    def _send(self, method: str, url: str, headers: dict, body_str: str):
+        if method == "GET":
+            return requests.get(url, headers=headers, timeout=30)
+        return requests.post(url, headers=headers, data=body_str, timeout=30)
 
     def _request(self, method: str, path: str, params: dict = None, body: dict = None) -> dict:
         sign_path = path
@@ -30,27 +58,36 @@ class GongjiClient:
         if body is not None:
             body_str = json.dumps(body, separators=(",", ":"), ensure_ascii=False)
 
-        headers = build_headers(sign_path, self.config, self.private_key, body=body_str)
         url = f"{self.base_url}{sign_path}"
 
-        try:
-            if method == "GET":
-                resp = requests.get(url, headers=headers, timeout=30)
-            else:
-                resp = requests.post(url, headers=headers, data=body_str, timeout=30)
-            resp.raise_for_status()
-            return resp.json()
-        except requests.exceptions.ConnectionError:
-            raise GongjiError(f"无法连接到 API 服务器 ({self.base_url})，请检查网络")
-        except requests.exceptions.Timeout:
-            raise GongjiError("API 请求超时，请稍后重试")
-        except requests.exceptions.HTTPError as e:
+        last_exc = None
+        for attempt in range(self.max_retries + 1):
+            # 每次重试都重新签名（timestamp 需要刷新）
+            headers = build_headers(sign_path, self.config, self.private_key, body=body_str)
             try:
-                err_data = e.response.json()
-                msg = err_data.get("message") or err_data.get("error") or str(err_data)
-            except Exception:
-                msg = f"HTTP {e.response.status_code}"
-            raise GongjiError(f"API 返回错误: {msg}")
+                resp = self._send(method, url, headers, body_str)
+                if resp.status_code in _RETRY_STATUS and attempt < self.max_retries:
+                    time.sleep(self.retry_backoff * (2 ** attempt))
+                    continue
+                resp.raise_for_status()
+                return resp.json()
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                last_exc = e
+                if attempt < self.max_retries:
+                    time.sleep(self.retry_backoff * (2 ** attempt))
+                    continue
+                if isinstance(e, requests.exceptions.Timeout):
+                    raise GongjiError("API 请求超时（已重试），请稍后再试")
+                raise GongjiError(f"无法连接到 API 服务器 ({self.base_url})，请检查网络")
+            except requests.exceptions.HTTPError as e:
+                try:
+                    err_data = e.response.json()
+                    msg = err_data.get("message") or err_data.get("error") or str(err_data)
+                except Exception:
+                    msg = f"HTTP {e.response.status_code}"
+                raise GongjiError(f"API 返回错误: {_friendly_error(msg)}")
+        # 不应到达
+        raise GongjiError(str(last_exc) if last_exc else "未知错误")
 
     def _get(self, path: str, params: dict = None) -> dict:
         return self._request("GET", path, params=params)

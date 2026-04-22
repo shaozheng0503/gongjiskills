@@ -32,6 +32,16 @@ Agent: "用完了，释放"
 
 ### 第二步：安装
 
+**一键脚本（推荐）** — 自动检测 Python/pip/openssl，支持 `GONGJI_TOKEN` 自动 init：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shaozheng0503/gongjiskills/main/install.sh | bash
+# 带 token 免交互:
+GONGJI_TOKEN=xxx curl -fsSL https://raw.githubusercontent.com/shaozheng0503/gongjiskills/main/install.sh | bash
+```
+
+**或者 pip 安装：**
+
 ```bash
 pip install git+https://github.com/shaozheng0503/gongjiskills.git
 ```
@@ -81,10 +91,14 @@ gongji resources    # 查看可用GPU和价格
 默认只显示有库存的，按价格从低到高排列：
 
 ```bash
-gongji resources          # 有库存的（按价格排序）
-gongji resources --all    # 全部（含售罄）
-gongji resources --json   # JSON 输出
+gongji resources                 # 有库存的（按价格排序）
+gongji resources --all           # 全部（含售罄）
+gongji resources -g 4090         # 只看 4090
+gongji resources -g 4090 -r 广东  # 4090 + 广东区域
+gongji resources --json          # JSON 输出
 ```
+
+输出会自动合并相同 GPU 规格的重复项，区域作为子行展示。
 
 **输出：**
 
@@ -105,29 +119,35 @@ gongji resources --json   # JSON 输出
 
 ### `images` — 镜像模板管理
 
-内置模板无需配置即可使用，也可添加自己或平台的预制镜像作为模板：
+**9 个内置模板开箱即用**，无需配置：
+
+| 名称 | 用途 | 镜像 | 默认端口 |
+|------|------|------|----------|
+| `vllm` | OpenAI 兼容 LLM 推理 | `vllm/vllm-openai:latest` | 8000 |
+| `ollama` | Ollama 一键 LLM | `ollama/ollama:latest` | 11434 |
+| `tgi` | HuggingFace TGI | `ghcr.io/huggingface/text-generation-inference:latest` | 80 |
+| `xinference` | Xorbits 多模型推理 | `xprobe/xinference:latest` | 9997 |
+| `comfyui` | 节点式图像生成 | `ghcr.io/ai-dock/comfyui:latest-cuda` | 8188 |
+| `sd-webui` | SD Automatic1111 | `ghcr.io/ai-dock/stable-diffusion-webui:latest-cuda` | 7860 |
+| `jupyter` | 数据科学 Notebook | `jupyter/datascience-notebook:latest` | 8888 |
+| `pytorch` | PyTorch 训练环境 | `pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime` | 8888 |
+| `ffmpeg` | FFmpeg 媒体处理（CPU） | `harbor.suanleme.cn/library/ffmpeg-api:cpu` | 8080 |
 
 ```bash
 gongji images                        # 列出所有模板（内置 + 自定义）
-gongji images add vllm \
-  --image harbor.suanleme.cn/library/vllm:latest \
+gongji images --json                 # JSON 输出（Agent 获取完整列表）
+gongji images add my-vllm \
+  --image my-registry/vllm:latest \
   --gpu 4090 --port 8000 \
-  --desc "vLLM OpenAI 兼容推理"      # 添加模板
-gongji images rm vllm                # 删除自定义模板
-gongji images --json                 # JSON 输出
+  --desc "我的定制 vLLM"               # 添加自定义模板
+gongji images rm my-vllm             # 删除自定义模板
 ```
 
-**输出：**
+**一键部署内置模板：**
 
-```
-名称               镜像                                              GPU      端口   说明
-----------------------------------------------------------------------------------------------
-ffmpeg [内置]      harbor.suanleme.cn/library/ffmpeg-api:cpu        -        8080  FFmpeg 媒体处理 API
-vllm               harbor.suanleme.cn/library/vllm:latest           4090     8000  vLLM OpenAI 兼容推理
-
-共 2 个模板
-  部署: gongji deploy --template <名称> -n <任务名>
-  添加: gongji images add <名称> --image <镜像地址>
+```bash
+gongji deploy --template vllm -n my-llm --json          # 最简
+gongji deploy --template comfyui -n sd-svc -g 4090 -r 广东  # 指定区域
 ```
 
 模板存储在 `~/.gongji/templates.json`（权限 600），内置模板不可删除。
@@ -199,7 +219,17 @@ curl https://deployment-452-xxx-8080.550w.link/v1/chat/completions \
 | `--start-cmd` | 容器启动命令 | - |
 | `--start-args` | 启动参数（引号包裹） | - |
 | `--no-wait` | 不等待就绪，立即返回 task_id | - |
+| `--ttl` | TTL 秒数，到期自动释放任务（防忘记 stop 烧钱） | - |
 | `--json` | JSON 格式输出（供 Agent 解析） | - |
+
+**TTL 自动释放示例：**
+
+```bash
+# 一次性推理任务，1 小时后自动释放
+gongji deploy --template vllm -n tmp-llm --ttl 3600 --json
+# 会在后台启动守护进程，到期调用 stop；输出会包含 auto_release_pid
+# 取消 TTL：kill <pid>
+```
 
 ### `list` — 查看任务列表
 
@@ -253,7 +283,7 @@ gongji logs 1926525 --events       # 查看事件（镜像拉取失败、OOM 等
   [Normal] Pulling: Pulling image "my-image:v1"  (2026-04-13T09:59:55Z)
 ```
 
-### `stop` — 停止 / 暂停 / 恢复任务
+### `stop` — 停止 / 暂停 / 恢复任务（支持批量）
 
 ```bash
 gongji stop 1926525                # 删除（不可恢复，需确认）
@@ -261,6 +291,10 @@ gongji stop 1926525 -f             # 强制删除
 gongji stop 1926525 --pause        # 暂停（释放资源，可恢复）
 gongji stop 1926525 --resume       # 恢复暂停的任务
 gongji stop 1926525 -f --json      # Agent 调用
+
+gongji stop --all                  # 批量删除所有任务（需确认）
+gongji stop --all -f --json        # Agent 一键释放所有
+# → {"stopped": [1, 2, 3], "failed": []}
 ```
 
 ### `--json` — Agent 必须用的输出模式
@@ -334,6 +368,12 @@ Agent 会自动调用 CLI 完成操作并返回结果。
 
 ---
 
+## 可靠性
+
+- **瞬时错误自动重试**：连接失败/超时/5xx 会自动重试 2 次（指数退避）
+- **友好错误映射**：Token 失效、签名错误、余额不足、库存不足等常见错误自动附上修复建议
+- **TTL 守护**：`--ttl` 启动独立后台进程，即使 CLI 退出也会按时释放
+
 ## 安全
 
 - `~/.gongji/` 目录权限 `700`（仅当前用户可访问）
@@ -352,7 +392,8 @@ gongjiskills/
 │   ├── auth.py            # RSA-SHA256 签名 + 权限检查
 │   ├── client.py          # API 客户端 + 网络错误处理
 │   └── cli.py             # CLI 实现（8 个命令）
-├── tests/                  # 23 个测试
+├── install.sh              # 一键安装脚本（环境检测 + pip install）
+├── tests/                  # 32 个测试
 │   ├── test_cli.py        # CLI 参数解析 + JSON 输出契约
 │   └── test_auth.py       # 签名验证 + 配置加载
 ├── skills/
