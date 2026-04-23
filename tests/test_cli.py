@@ -182,24 +182,33 @@ def test_merge_resources_dedup():
 
 
 def test_builtin_templates_expanded():
-    """内置模板应包含常用 AI 镜像"""
+    """内置模板应来自平台预制镜像，覆盖核心分类"""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from gongjiskills.cli import BUILTIN_TEMPLATES
-    must_have = {"vllm", "ollama", "comfyui", "sd-webui", "jupyter", "ffmpeg"}
+    from gongjiskills.cli import BUILTIN_TEMPLATES, CATEGORIES
+    # 短名 + 代表性分类模板
+    must_have = {"vllm", "ollama", "qwen3.5-9b", "whisper", "mineru",
+                 "qwen-image", "ubuntu2404", "wan2.2"}
     assert must_have.issubset(set(BUILTIN_TEMPLATES.keys())), \
         f"缺少模板: {must_have - set(BUILTIN_TEMPLATES.keys())}"
-    # 每个模板至少要有 image 字段
+    # 每个模板必须有 image + category，category 必须是合法值
     for name, t in BUILTIN_TEMPLATES.items():
         assert "image" in t, f"模板 {name} 缺 image"
+        # 只接受平台 registry 的镜像（杜绝假的上游镜像混进来）
+        assert t["image"].startswith("harbor.suanleme.cn/"), \
+            f"模板 {name} 的镜像不是平台镜像: {t['image']}"
+        assert "category" in t, f"模板 {name} 缺 category"
+        assert t["category"] in CATEGORIES, \
+            f"模板 {name} 的 category [{t['category']}] 不在 CATEGORIES 中"
 
 
 def test_images_command_shows_builtin():
-    """gongji images 无 API 凭据也能显示内置模板"""
+    """gongji images 无 API 凭据也能显示内置模板（按分类分组）"""
     out, _, rc = run(["images"])
-    # images 命令不需要配置文件，直接成功
     assert rc == 0
     assert "vllm" in out
-    assert "comfyui" in out
+    assert "qwen-image" in out
+    # 应该显示分类标签
+    assert "大语言模型推理" in out or "llm" in out
 
 
 def test_images_json_is_valid():
@@ -208,6 +217,30 @@ def test_images_json_is_valid():
     data = json.loads(out)
     assert isinstance(data, dict)
     assert "vllm" in data
+    # 每条记录有 category 字段
+    assert data["vllm"].get("category") == "llm"
+
+
+def test_images_category_filter():
+    """--category 应只输出该分类的模板"""
+    out, _, rc = run(["images", "--category", "llm", "--json"])
+    assert rc == 0
+    data = json.loads(out)
+    assert isinstance(data, dict)
+    assert len(data) > 0
+    for name, t in data.items():
+        assert t.get("category") == "llm", f"{name} 不是 llm 分类"
+
+
+def test_images_categories_subcommand():
+    """gongji images categories 列出所有分类"""
+    out, _, rc = run(["images", "categories", "--json"])
+    assert rc == 0
+    data = json.loads(out)
+    assert isinstance(data, dict)
+    # 核心分类必须存在且有模板
+    assert data.get("llm", 0) > 0
+    assert data.get("image-gen", 0) > 0
 
 
 def test_friendly_error_mapping():

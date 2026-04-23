@@ -4,6 +4,7 @@
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -13,71 +14,19 @@ from pathlib import Path
 warnings.filterwarnings("ignore")
 
 from .client import GongjiClient, _friendly_error
+from .templates import BUILTIN_TEMPLATES, CATEGORIES, group_by_category
 
 
 _json_mode = False
 
-# ── 内置镜像模板 ──────────────────────────────────────────────────────────────
 
-BUILTIN_TEMPLATES: dict[str, dict] = {
-    # 平台官方镜像
-    "ffmpeg": {
-        "image": "harbor.suanleme.cn/library/ffmpeg-api:cpu",
-        "port": "8080",
-        "description": "FFmpeg 媒体处理 API（CPU）",
-    },
-    # LLM 推理
-    "vllm": {
-        "image": "vllm/vllm-openai:latest",
-        "gpu": "4090",
-        "port": "8000",
-        "description": "vLLM OpenAI 兼容推理服务",
-    },
-    "ollama": {
-        "image": "ollama/ollama:latest",
-        "gpu": "4090",
-        "port": "11434",
-        "description": "Ollama 一键 LLM 服务",
-    },
-    "tgi": {
-        "image": "ghcr.io/huggingface/text-generation-inference:latest",
-        "gpu": "4090",
-        "port": "80",
-        "description": "HuggingFace TGI 推理",
-    },
-    "xinference": {
-        "image": "xprobe/xinference:latest",
-        "gpu": "4090",
-        "port": "9997",
-        "description": "Xorbits Inference 多模型推理",
-    },
-    # 图像生成
-    "comfyui": {
-        "image": "ghcr.io/ai-dock/comfyui:latest-cuda",
-        "gpu": "4090",
-        "port": "8188",
-        "description": "ComfyUI 节点式图像生成",
-    },
-    "sd-webui": {
-        "image": "ghcr.io/ai-dock/stable-diffusion-webui:latest-cuda",
-        "gpu": "4090",
-        "port": "7860",
-        "description": "Stable Diffusion Automatic1111 WebUI",
-    },
-    # 开发 / 训练
-    "jupyter": {
-        "image": "jupyter/datascience-notebook:latest",
-        "gpu": "4090",
-        "port": "8888",
-        "description": "Jupyter 数据科学 Notebook",
-    },
-    "pytorch": {
-        "image": "pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime",
-        "gpu": "4090",
-        "port": "8888",
-        "description": "PyTorch 训练基础环境",
-    },
-}
+def _parse_start_args(v):
+    """把 start_args 归一化为 list[str]；支持 list 或 shell 字符串"""
+    if v is None:
+        return None
+    if isinstance(v, list):
+        return list(v)
+    return shlex.split(str(v))
 
 
 def _templates_path() -> Path:
@@ -478,8 +427,12 @@ def cmd_deploy(client: GongjiClient, args):
             args.image = tmpl.get("image")
         if not args.gpu:
             args.gpu = tmpl.get("gpu")
+        if not getattr(args, "gpu_count", None) and tmpl.get("gpu_count"):
+            args.gpu_count = tmpl["gpu_count"]
         if args.port == "8080" and tmpl.get("port"):
             args.port = tmpl["port"]
+        if not args.env and tmpl.get("env"):
+            args.env = tmpl["env"]
         if not args.start_cmd and tmpl.get("start_cmd"):
             args.start_cmd = tmpl["start_cmd"]
         if not args.start_args and tmpl.get("start_args"):
@@ -548,7 +501,7 @@ def cmd_deploy(client: GongjiClient, args):
     if args.start_cmd:
         create_kwargs["command"] = args.start_cmd
     if args.start_args:
-        create_kwargs["args"] = args.start_args.split()
+        create_kwargs["args"] = _parse_start_args(args.start_args)
 
     if not args.json:
         print(f"正在创建任务 [{args.name}]...")
@@ -926,41 +879,85 @@ def cmd_images(args):
         print(f"模板 [{args.name}] 已删除")
         return
 
-    # 默认：列出所有模板
+    # categories 子命令：列出分类
+    if subaction == "categories":
+        if args.json:
+            _json_out(_category_counts())
+        print("\n【镜像分类】")
+        print(f"  {'分类key':<14} {'中文名':<16} 镜像数")
+        print(f"  {'-'*44}")
+        for cat, count in _category_counts().items():
+            label = CATEGORIES.get(cat, cat)
+            print(f"  {cat:<14} {label:<16} {count}")
+        print(f"\n按分类筛选: gongji images --category <key>")
+        print(f"一键部署:   gongji deploy --template <模板名> -n <任务名>")
+        return
+
+    # 默认：列出所有模板（支持 --category 筛选）
     templates = _load_templates()
     user_tmpls = _get_user_templates()
+
+    cat_filter = getattr(args, "category", None)
+    if cat_filter:
+        if cat_filter not in CATEGORIES:
+            _fail(f"分类 [{cat_filter}] 不存在。可选: {', '.join(CATEGORIES.keys())}")
+        templates = {n: t for n, t in templates.items() if t.get("category") == cat_filter}
 
     if args.json:
         _json_out(templates)
 
     if not templates:
-        print("暂无模板，用 gongji images add <name> --image <addr> 添加")
+        if cat_filter:
+            print(f"分类 [{cat_filter}] 下暂无模板")
+        else:
+            print("暂无模板，用 gongji images add <name> --image <addr> 添加")
         return
 
-    # 按内置/自定义分组展示
-    builtin = [(n, t) for n, t in templates.items() if n in BUILTIN_TEMPLATES and n not in user_tmpls]
-    custom = [(n, t) for n, t in templates.items() if n in user_tmpls]
+    # 按分类分组展示
+    groups = group_by_category(templates)
+    # 按 CATEGORIES 定义的顺序遍历
+    cat_order = list(CATEGORIES.keys()) + ["_uncategorized"]
+    builtin_count = sum(1 for n in templates if n in BUILTIN_TEMPLATES and n not in user_tmpls)
+    custom_count = len(user_tmpls) if not cat_filter else sum(1 for n in templates if n in user_tmpls)
 
-    def _print_group(title: str, items: list):
+    for cat in cat_order:
+        items = groups.get(cat, [])
         if not items:
-            return
-        print(f"\n{title}")
-        print(f"  {'名称':<14} {'推荐GPU':<8} {'端口':<6} 说明")
-        print(f"  {'-'*70}")
+            continue
+        label = CATEGORIES.get(cat, "自定义/其他")
+        print(f"\n【{label}】  ({cat})")
+        print(f"  {'名称':<26} {'GPU':<8} {'端口':<14} 说明")
+        print(f"  {'-'*96}")
         for name, tmpl in items:
             gpu = tmpl.get("gpu", "-")
+            if tmpl.get("gpu_count"):
+                gpu = f"{gpu}×{tmpl['gpu_count']}"
             port = tmpl.get("port", "-")
             desc = tmpl.get("description", "") or tmpl.get("image", "")
-            print(f"  {name:<14} {gpu:<8} {port:<6} {desc}")
+            is_custom = name in user_tmpls
+            prefix = "*" if is_custom else " "
+            print(f"  {prefix}{name:<25} {gpu:<8} {port:<14} {desc}")
 
-    _print_group("【内置模板】（开箱即用）", builtin)
-    _print_group("【自定义模板】", custom)
+    if cat_filter:
+        print(f"\n分类 [{cat_filter}] 共 {len(templates)} 个模板")
+    else:
+        print(f"\n共 {len(templates)} 个模板 (内置 {builtin_count} + 自定义 {custom_count})")
+        print("  * = 自定义模板")
+    print("  按分类看:  gongji images --category <key>  (key 见 gongji images categories)")
+    print("  部署:      gongji deploy --template <名称> -n <任务名>")
+    print("  添加:      gongji images add <名称> --image <镜像地址>")
+    print("  删除:      gongji images rm <名称>")
 
-    print(f"\n共 {len(templates)} 个模板 (内置 {len(builtin)} + 自定义 {len(custom)})")
-    print("  部署: gongji deploy --template <名称> -n <任务名>")
-    print("  查看详情: gongji images --json")
-    print("  添加: gongji images add <名称> --image <镜像地址>")
-    print("  删除: gongji images rm <名称>")
+
+def _category_counts() -> dict:
+    """统计每个分类下的模板数量（按 CATEGORIES 顺序）"""
+    templates = _load_templates()
+    counts = {cat: 0 for cat in CATEGORIES}
+    for tmpl in templates.values():
+        cat = tmpl.get("category")
+        if cat in counts:
+            counts[cat] += 1
+    return counts
 
 # ── main ──
 
@@ -1019,9 +1016,11 @@ def main():
     # images
     p_img = sub.add_parser("images", help="管理镜像模板（无需配置文件）")
     p_img.add_argument("--json", "-j", action="store_true", help="JSON格式输出")
+    p_img.add_argument("--category", default=None,
+                       help="按分类筛选 (llm/image-gen/video/audio/...)，用 gongji images categories 查看全部")
     img_sub = p_img.add_subparsers(dest="subaction")
     p_img_add = img_sub.add_parser("add", help="添加镜像模板")
-    p_img_add.add_argument("name", help="模板名称，如 vllm / comfyui")
+    p_img_add.add_argument("name", help="模板名称，如 my-vllm")
     p_img_add.add_argument("--image", "-i", required=True, help="Docker 镜像地址")
     p_img_add.add_argument("--gpu", "-g", default=None, help="推荐 GPU 型号，如 4090")
     p_img_add.add_argument("--port", "-p", default=None, help="默认暴露端口")
@@ -1030,6 +1029,8 @@ def main():
     p_img_add.add_argument("--start-args", default=None, help="默认启动参数")
     p_img_rm = img_sub.add_parser("rm", help="删除镜像模板")
     p_img_rm.add_argument("name", help="模板名称")
+    p_img_cat = img_sub.add_parser("categories", help="列出所有镜像分类及其数量")
+    p_img_cat.add_argument("--json", "-j", action="store_true", help="JSON格式输出")
 
     # stop
     p_stop = sub.add_parser("stop", help="停止/暂停/恢复任务（支持 --all 批量）")
