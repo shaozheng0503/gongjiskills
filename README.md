@@ -1,592 +1,526 @@
 # 共绩算力 Skills
 
-> 让 AI Agent（或你自己）用一条命令就能在 [共绩算力](https://www.gongjiyun.com) 上开一台 GPU、跑服务、拿到公网地址、用完就释放。
+> 一份"粘给 Agent 就能跑"的 GPU 弹性部署工具。
 >
-> **47 个平台预制镜像模板 · 11 个分类 · CLI + Python API + Claude Code Skill · TTL 自动释放 · JSON 契约**
+> **适用对象**：Claude Code / Cursor / OpenCode / Codex CLI / Cline / 自研 Agent —— 任何能执行 bash 的 AI Agent。
+>
+> **使用方式**：把下面任意场景的"用户原话"整段复制发给你的 Agent，它会自动完成：
+> 安装 Skill → 初始化凭据 → 开 GPU → 部署服务 → 返回公网 URL → 用完自动释放。
 
 **相关文档：**
-[共绩算力官网](https://www.gongjiyun.com) ·
-[Open API 文档](https://www.gongjiyun.com/docs/platform/openapi/zx3iwhbv1i8sxdkeiapcprxhn8d/) ·
-[API 接口详情 (Apifox)](https://s.apifox.cn/6aa360d3-d8f2-471e-b841-3a35c33a7b7c) ·
-[完整介绍文档](./docs/介绍.md) ·
-[预制镜像清单](./docs/预制镜像清单.md)
+[共绩官网](https://www.gongjiyun.com) ·
+[Open API](https://www.gongjiyun.com/docs/platform/openapi/zx3iwhbv1i8sxdkeiapcprxhn8d/) ·
+[CLI 参数](./docs/cli-reference.md) ·
+[Python API](./docs/python-api.md) ·
+[安全](./docs/security.md) ·
+[开发](./docs/development.md) ·
+[Claude Code](./docs/claude-code.md)
 
 ---
 
 ## 目录
 
-- [这是什么](#这是什么)
-- [能力速览](#能力速览)
-- [快速开始](#快速开始)
-  - [安装](#安装)
-  - [初始化](#初始化)
-  - [验证](#验证)
-- [CLI 命令参考](#cli-命令参考)
-  - [`resources` — 查看 GPU 资源](#resources--查看-gpu-资源)
-  - [`images` — 镜像模板管理](#images--镜像模板管理)
-  - [`deploy` — 部署任务](#deploy--部署任务)
-  - [`list` — 列任务](#list--列任务)
-  - [`status` — 任务详情](#status--任务详情)
-  - [`logs` — 日志/事件](#logs--日志事件)
-  - [`stop` — 停止/暂停/恢复](#stop--停止暂停恢复)
-- [47 个预制模板完整清单](#47-个预制模板完整清单)
-- [按分类一键部署手册](#按分类一键部署手册)
-- [Python API](#python-api)
-- [在 Claude Code 中使用](#在-claude-code-中使用)
-- [Agent / JSON 契约](#agent--json-契约)
-- [可靠性与错误处理](#可靠性与错误处理)
-- [安全](#安全)
-- [成本控制](#成本控制)
-- [项目结构](#项目结构)
-- [开发与测试](#开发与测试)
-- [常见问题（FAQ）](#常见问题faq)
-- [License](#license)
+- [0. 一次性准备](#0-一次性准备仅首次)
+- [1. 安装与初始化](#1-安装与初始化agent-第一次听到你说话时做的事)
+- [2. Agent 调用协议速览](#2-agent-调用协议速览)
+- [3. 典型调用场景](#3-典型调用场景粘给-agent-即可)
+  - [A · Z-Image 文生图](#场景-a--z-image-文生图)
+  - [B · Qwen3.5-9B LLM 推理](#场景-b--qwen35-9b-llm-推理服务)
+  - [C · LLM + Image 组合](#场景-c--llm--image-组合让-llm-写提示词--z-image-生成图)
+  - [D · Qwen3-VL 多模态视觉](#场景-d--qwen3-vl-多模态视觉理解)
+  - [E · Whisper 语音转文字](#场景-e--whisper-语音转文字)
+  - [F · IndexTTS 文本转语音](#场景-f--indextts-文本转语音)
+  - [G · MinerU 批量 PDF 解析](#场景-g--mineru-批量-pdf-解析为-markdown)
+  - [H · WAN 2.2 文生视频](#场景-h--wan-22-文生视频--图生视频)
+  - [I · FLUX.2 高质量出图](#场景-i--flux2-高质量文生图)
+  - [J · Ubuntu + Jupyter 开发环境](#场景-j--ubuntu-开发环境--jupyter)
+  - [K · LLaMA Factory 模型微调](#场景-k--llama-factory-模型微调)
+  - [L · ACE-Step 音乐生成](#场景-l--ace-step-音乐生成)
+- [4. 生产模板：PDF-QA 流水线](#4-生产模板pdf-qa-流水线)
+- [5. 47 个预制模板完整清单](#5-47-个预制模板完整清单)
+- [6. Agent 一行指令参考表](#6-agent-一行指令参考表)
+- [7. 任务管理与释放](#7-任务管理与释放)
+- [8. 省钱与稳定性建议](#8-省钱与稳定性建议)
+- [9. 常见问题](#9-常见问题)
+- [附：速查一行命令](#附速查一行命令)
 
 ---
 
-## 这是什么
+## 0. 一次性准备（仅首次）
 
-AI Agent / 开发者在下面场景都可能用到临时 GPU：
+你只需要做两件事：
 
-- 跑一次 Qwen / Flux / SD 推理或生成
-- 批量 OCR 一批 PDF
-- 给客户演示一个 ComfyUI 工作流
-- CI 里跑一次模型评估
-- Agent 执行任务中途需要调用视觉/语音模型
+1. 在 [共绩算力官网](https://www.gongjiyun.com) 注册账号并充值 ¥10–20（足够体验所有场景）。
+2. 打开：头像 → API 密钥 → **RSA 模式** → 新建，拿到一串 token。
 
-传统做法要手动登控制台选 GPU、配镜像、开端口、等启动、抄 URL、**用完记得回去释放**（容易忘 → 持续烧钱）。
+把 token 先留着，后面让 Agent 用它初始化。
 
-这个 Skill 把全流程压缩成一条命令：
+**你不需要装 Python、不需要装 Docker、不需要开 VPN。** 全部由 Agent 在第一条消息里自动搞定。
 
-```bash
-gongji deploy --template qwen3.5-9b -n my-llm --ttl 3600 --json
-# 自动：查最便宜 4090 → 建部署 → 等就绪 → 返回 URL → 1 小时后自动释放
+---
+
+## 1. 安装与初始化（Agent 第一次听到你说话时做的事）
+
+**粘给 Agent**：
+
+```text
+请帮我安装 https://github.com/shaozheng0503/gongjiskills 这个 Skill。
+
+步骤：
+1. 用一键安装脚本：
+   curl -fsSL https://raw.githubusercontent.com/shaozheng0503/gongjiskills/main/install.sh | bash
+2. 用我提供的 token 初始化（非交互模式）：
+   GONGJI_TOKEN=<粘这里> gongji init --force
+3. 跑 `gongji resources --json` 验证一下，看到 GPU 列表就算成功。
+4. 之后所有涉及 GPU / LLM / 生图 / 视频 / 语音 的请求都用 `gongji` CLI 完成，
+   并且务必加 `--ttl 3600` 避免忘记释放烧钱。
+
+我的 token 是：<把你的 RSA token 粘在这里>
 ```
 
-它提供三种入口：
-- **CLI** `gongji xxx` — 命令行 / 脚本 / CI
-- **Python API** `from gongjiskills import GongjiClient` — 嵌入自研 Agent
-- **Claude Code Skill** `/gongji` — 自然语言调用
-
----
-
-## 能力速览
-
-| 能力 | 说明 |
-|------|------|
-| 🎯 智能选资源 | 自动查所有区域，按折扣价排序选最便宜有库存的 |
-| 📦 预制模板库 | 47 个平台镜像（LLM/图像/视频/语音/OCR/训练...） |
-| 🗂️ 分类发现 | 11 个分类，`gongji images --category llm` 快速定位 |
-| 🚀 一键部署 | 查资源 + 建任务 + 等就绪 + 拿 URL 全自动 |
-| ⏰ TTL 自动释放 | `--ttl 3600` 后台守护，到期自动 stop |
-| 🔁 自动重试 | 网络超时 / 5xx 自动重试（指数退避 ×2） |
-| 💬 友好错误 | Token 失效 / 签名错误 / 库存不足自动附修复建议 |
-| 📋 JSON 契约 | 所有命令 `--json` 输出结构化数据，Agent 直接解析 |
-| 🔐 安全加固 | 私钥 600、目录 700、权限自动检测、支持 env var |
-| 🧩 自定义扩展 | `gongji images add` 添加自定义模板 |
-| 📊 实时事件 | 部署过程中显示拉镜像、启容器、失败原因 |
-| 🧹 批量管理 | `gongji stop --all` 一键释放所有任务 |
-
----
-
-## 快速开始
-
-### 安装
-
-**方式 1：一键脚本（推荐）**
-
-自动检测 Python / pip / openssl，支持 `GONGJI_TOKEN` 自动 init：
+**Agent 实际会跑的命令：**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shaozheng0503/gongjiskills/main/install.sh | bash
-
-# 带 token 免交互（适合 Agent / CI）
-GONGJI_TOKEN=xxx curl -fsSL https://raw.githubusercontent.com/shaozheng0503/gongjiskills/main/install.sh | bash
+GONGJI_TOKEN="eyJhbGciOi..." gongji init --force
+gongji resources --json | head -50
 ```
 
-**方式 2：pip 直接安装**
-
-```bash
-pip install git+https://github.com/shaozheng0503/gongjiskills.git
-```
-
-**方式 3：本地 clone + 安装（适合开发）**
-
-```bash
-git clone https://github.com/shaozheng0503/gongjiskills.git
-cd gongjiskills
-pip install .
-# 或开发模式（修改代码即时生效）
-pip install -e .
-```
-
-安装后可全局调用 `gongji` 命令。也支持 `python3 gongji.py xxx`（仓库根目录的兼容入口）。
-
-**依赖：**
-- Python ≥ 3.9
-- `requests`（HTTP 客户端）
-- `cryptography`（RSA 签名）
-- `openssl` 命令（用于 init 生成密钥对）
-
-### 初始化
-
-注册共绩账号并充值（[定价](https://www.gongjiyun.com/pricing/)）后：
-
-```bash
-gongji init
-```
-
-`init` 会依次完成：
-
-1. 生成 RSA 密钥对（`~/.gongji/private.key` + `public.pem`），私钥权限自动设为 `600`
-2. 显示公钥 → 复制到 [控制台](https://www.gongjiyun.com) 头像 → API密钥 → RSA 模式
-3. 输入控制台生成的 API Token
-4. 验证连通性（查一次 GPU 资源）
-
-**Agent / CI 非交互模式：**
-
-```bash
-# 推荐：环境变量传 token（不会进 shell history）
-GONGJI_TOKEN=xxx gongji init --force
-
-# 或命令行参数
-gongji init --token xxx --force
-```
-
-**初始化目录结构：**
-
-```
-~/.gongji/
-├── config.json       # 600 - 包含 token 和密钥路径
-├── private.key       # 600 - RSA 私钥
-├── public.pem        # 644 - RSA 公钥（供上传控制台）
-└── ttl/              # TTL 守护进程的日志 / PID 目录
-    ├── <task_id>.log
-    └── <task_id>.pid
-```
-
-> 详细的 RSA 模式说明见 [共绩官方指南](https://www.gongjiyun.com/docs/platform/openapi/m3p6whioxidzwaksughc4gfhnro/)。
-
-### 验证
-
-```bash
-gongji resources -g 4090
-```
-
-如果能看到 4090 的价格和库存，就说明凭据配好了。
+看到类似 `{"gpu_name":"4090","regions":[{"region":"广东","price":...}]}` 就是装好了。
 
 ---
 
-## CLI 命令参考
+## 2. Agent 调用协议速览
 
-全局参数约定：
-- `--json` / `-j` — 所有命令都支持，Agent 调用时务必加
-- `--force` / `-f` — 跳过确认或覆盖配置
-- 成功返回 exit code 0；失败返回 1（JSON 模式下也输出 `{"error": "..."}`）
+Agent 和 CLI 之间通过 JSON 契约通信，**所有命令都要加 `--json`**。
 
-### `resources` — 查看 GPU 资源
+| 命令 | 作用 | 返回关键字段 |
+|------|------|------------|
+| `gongji images categories --json` | 列所有分类 | `{"llm":10,"image-gen":10,...}` |
+| `gongji images --category <k> --json` | 列分类下模板 | `{"vllm":{...},"qwen3.5-9b":{...}}` |
+| `gongji resources --json` | 查 GPU 库存价格 | `[{"gpu_name":"4090","regions":[...]}]` |
+| `gongji deploy --template <t> -n <name> --ttl 3600 --json` | 开一台 GPU 跑服务 | `{"task_id":...,"status":"Running","urls":[...]}` |
+| `gongji status <id> --json` | 任务详情（含费用） | `{"status":"Running","billing_value":...}` |
+| `gongji logs <id>` | 容器日志 | 纯文本 |
+| `gongji logs <id> --events` | 事件（排查失败） | 纯文本 |
+| `gongji stop <id> -f --json` | 释放单个任务 | `{"ok":true}` |
+| `gongji stop --all -f --json` | 一键释放全部 | `{"stopped":[...],"failed":[]}` |
 
-默认只显示有库存的，按折扣价从低到高排列：
+**Agent 工作三件套：**
 
-```bash
-gongji resources                      # 有库存的（按价格排序）
-gongji resources --all                # 全部（含售罄）
-gongji resources -g 4090              # 只看 4090
-gongji resources -g 4090 -r 广东       # 4090 + 广东区域
-gongji resources --json                # JSON 输出
-```
+1. 开服务 → 拿 `urls[0].url`
+2. 用 curl 或 SDK 调用这个 URL
+3. 用完 `gongji stop <task_id> -f`
 
-**参数：**
-
-| 参数 | 说明 | 默认 |
-|------|------|------|
-| `--all, -a` | 显示全部（含售罄） | false |
-| `--gpu, -g` | GPU 型号关键词（如 4090/H800） | 不限 |
-| `--region, -r` | 区域关键词（如 广东/河南） | 不限 |
-| `--json, -j` | JSON 输出 | - |
-
-**文本输出示例：**
-
-```
-4090 x1  (显存 24.0G | 16核 | 63G)
-  区域           库存     单价(元/h)      折扣价(元/h)
-  ------------------------------------------------
-  河北六区         21     1.68         1.05
-  广东一区         327    1.68         1.05
-
-5090 x1  (显存 31.8G | 48核 | 63G)
-  区域           库存     单价(元/h)      折扣价(元/h)
-  ------------------------------------------------
-  安徽一区         6      2.50         1.60
-
-有库存 14 种（共 44 种，用 --all 查看全部）
-```
-
-**合并逻辑：** 相同 `(gpu_name, gpu_count, gpu_memory, cpu, memory)` 组合会合并成一行，区域作为子行展示，方便比对跨区域价格差异。
+> 失败统一格式：`{"error": "..."}`，exit code 1。完整 CLI 参数见 [docs/cli-reference.md](./docs/cli-reference.md)。
 
 ---
 
-### `images` — 镜像模板管理
+## 3. 典型调用场景（粘给 Agent 即可）
 
-本命令**不需要 API 凭据**，`init` 前也能用（方便 Agent 先看有啥模板再决定装不装）。
+下面每个场景都给出：**用户原话** + **Agent 会执行的命令** + **调用示例**。
 
-#### 默认：按分类分组列出
+---
+
+### 场景 A · Z-Image 文生图
+
+**用户原话**：
+
+```text
+用 z-image 给我生成一张图："赛博朋克风格的雨夜东京街头，霓虹招牌倒映在积水里，镜头仰角"。
+用共绩算力的 gongji CLI 部署，TTL 1 小时，拿到 URL 后直接在 ComfyUI API 上跑一次出图，
+把图下载到 ./out/cyberpunk.png，最后停掉任务。
+```
+
+**Agent 执行**：
 
 ```bash
-gongji images
+gongji deploy --template z-image -n zimg --ttl 3600 --json
 ```
 
-输出（每个分类一个分节，带 GPU × 卡数、端口、说明）：
-
-```
-【大语言模型推理】  (llm)
-  名称                         GPU      端口             说明
-  ---------------------------------------------------------------
-   gpt-oss-20b               4090     30000          OpenAI GPT-OSS-20B 开源模型，稀疏激活
-   minicpm-4-8b              4090×1   11434          面壁智能 MiniCPM 4-8B 端侧大模型
-   ollama                    4090     11434          平台预制 Ollama（需自行 pull 模型）
-   qwen3-30b-webui           4090×1   11434          Ollama + Open WebUI + Qwen3-30B
-   qwen3.5-0.8b              4090     8000           Qwen3.5-0.8B 超轻量 LLM
-   qwen3.5-27b               4090×8   8000           Qwen3.5-27B 阿里 270 亿多模态，26 万上下文
-   qwen3.5-27b-claude-gguf   4090×4   -              Qwen3.5-27B 蒸馏 Claude GGUF 量化
-   qwen3.5-9b                4090     8000           Qwen3.5-9B vLLM 推理
-   qwen3.5-9b-claude         4090×1   8000           Qwen3.5-9B 蒸馏 Claude 融合模型
-   vllm                      4090     8000           平台预制 vLLM，默认 Qwen3-8B-FP8
-...
-```
-
-#### 列分类
-
-```bash
-gongji images categories              # 11 个分类及模板数
-gongji images categories --json       # JSON
-```
-
-输出：
-
-```
-【镜像分类】
-  分类key          中文名              镜像数
-  --------------------------------------------
-  llm            大语言模型推理          10
-  multimodal     多模态视觉            3
-  image-gen      文生图              10
-  image-edit     图像编辑/人像          8
-  video          视频生成             3
-  3d             3D 重建            1
-  audio          语音合成/识别          4
-  music          音乐生成             2
-  ocr            文档解析/OCR         2
-  dev            训练/开发环境          3
-  tools          工具类              1
-```
-
-#### 按分类筛选
-
-```bash
-gongji images --category llm              # 只看 LLM 分类
-gongji images --category video --json     # JSON 输出
-```
-
-#### JSON 格式（Agent 消费）
-
-```bash
-gongji images --json                      # 全部模板
-gongji images --category llm --json       # LLM 分类
-```
-
-每条 JSON 记录包含：
+返回：
 
 ```json
 {
-  "vllm": {
-    "image": "harbor.suanleme.cn/public-hub/vllm-openai:v0.19.0-copy",
-    "category": "llm",
-    "description": "平台预制 vLLM，默认启动 Qwen3-8B-FP8",
-    "port": "8000",
-    "gpu": "4090",
-    "env": "VLLM_USE_MODELSCOPE=true",
-    "start_cmd": "/bin/bash",
-    "start_args": ["-c", "vllm serve Qwen/Qwen3-8B-FP8 --max-model-len 16K --max-num-seqs 2"],
-    "docs": "https://www.gongjiyun.com/docs/flexible-deployment/pre-fabricated-services/..."
-  }
-}
-```
-
-#### 添加自定义模板
-
-```bash
-gongji images add my-vllm \
-  --image harbor.suanleme.cn/my-hub/vllm:custom \
-  --gpu 4090 --port 8000 \
-  --desc "我的定制 vLLM" \
-  --start-cmd "/bin/bash" \
-  --start-args "-c 'vllm serve my-model --port 8000'"
-```
-
-存储在 `~/.gongji/templates.json`（权限 600）。**与内置重名会覆盖内置**。
-
-#### 删除自定义模板
-
-```bash
-gongji images rm my-vllm
-# 内置模板不可删除（会报错）
-```
-
-> ⚠️ **重要：** 所有内置模板的镜像地址都是 `harbor.suanleme.cn/...`（平台镜像仓库）。**不要用 `vllm/vllm-openai:latest`、`ghcr.io/...` 这类上游 docker hub 镜像地址，平台内网可能拉不到。** 一定要用 `gongji images` 里列出的模板，或者自己推镜像到 `harbor.suanleme.cn`。
-
----
-
-### `deploy` — 部署任务
-
-自动：查资源 → 选最便宜有库存的 → 创建任务 → 等待就绪 → 返回访问 URL。
-
-```bash
-gongji deploy <镜像地址> -n <任务名> [其他参数]
-gongji deploy --template <模板名> -n <任务名> [其他参数]
-```
-
-**参数全表：**
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `<image>` | Docker 镜像地址（与 `--template` 二选一） | - |
-| `--template, -t` | 镜像模板名（见 `gongji images`） | - |
-| `--name, -n` | 任务名称（**必填**） | - |
-| `--gpu, -g` | GPU 型号关键词，如 `4090` / `H800` | 模板值 或 自动选最便宜 |
-| `--gpu-count, -c` | GPU 卡数，如 `1` / `4` / `8` | 模板值 或 不限 |
-| `--region, -r` | 区域关键词，如 `广东` / `河南` / `河北` | 不限 |
-| `--port, -p` | 暴露端口，多个用逗号分隔 | 模板值 或 `8080` |
-| `--points` | 节点数量（多副本） | `1` |
-| `--env` | 环境变量（`KEY=val KEY2=val`） | 模板值 |
-| `--start-cmd` | 容器启动命令 | 模板值 |
-| `--start-args` | 启动参数（引号包裹） | 模板值 |
-| `--no-wait` | 不等待就绪，立即返回 task_id | - |
-| `--ttl` | TTL 秒数，到期自动释放 | - |
-| `--json, -j` | JSON 格式输出 | - |
-
-**参数优先级：** 命令行参数 > 模板值 > 默认值。
-
-**示例：**
-
-```bash
-# 1. 用模板（最简，推荐）
-gongji deploy --template vllm -n my-llm --json
-
-# 2. 用模板 + TTL 自动释放
-gongji deploy --template qwen3.5-9b -n tmp-llm --ttl 3600 --json
-
-# 3. 用模板 + 覆盖 GPU 数量
-gongji deploy --template qwen3.5-27b -n big-llm -c 4
-
-# 4. 用模板 + 限定区域
-gongji deploy --template wan2.2 -n video -r 广东
-
-# 5. 直接指定镜像（不用模板）
-gongji deploy harbor.suanleme.cn/public-hub/my-img:v1 \
-  -n my-svc -g 4090 -c 1 -p 8080
-
-# 6. 自定义启动命令
-gongji deploy harbor.suanleme.cn/public-hub/vllm-openai:v0.19.0-copy \
-  -n custom-llm -g 4090 -p 8000 \
-  --env "VLLM_USE_MODELSCOPE=true" \
-  --start-cmd "/bin/bash" \
-  --start-args "-c 'vllm serve Qwen/Qwen3-32B --max-model-len 32K'"
-
-# 7. 不等待立即返回
-gongji deploy --template ollama -n bg --no-wait --json
-# → {"task_id": ..., "status": "Pending"}
-
-# 8. 部署多副本
-gongji deploy --template whisper -n asr-cluster --points 3 --json
-```
-
-**部署过程输出（非 JSON 模式）：**
-
-```
-正在查询可用 GPU 资源...
-选中资源: 4090 x1 | 广东一区 | 1.05元/h (最低价)
-正在创建任务 [my-llm]...
-任务已创建, task_id=1926525
-已启用自动释放: 3600s (~60.0分钟) 后停止 (pid=12345)
-  取消: kill 12345
-等待任务启动...
-  [Pulling] Pulling image "harbor.suanleme.cn/public-hub/vllm-openai:v0.19.0-copy"
-  [Started] Started container istio-proxy
-  [Pulled] Successfully pulled image
-Running!
-访问地址: https://deployment-452-xxx-8000.550w.link (端口 8000)
-```
-
-**JSON 输出：**
-
-```json
-{
-  "task_id": 1926525,
+  "task_id": 1926601,
   "status": "Running",
   "urls": [
-    {"url": "https://deployment-452-xxx-8000.550w.link", "port": 8000}
-  ],
-  "ttl_seconds": 3600,
-  "auto_release_pid": 12345
+    {"url": "https://abc-3000.550c.cloud", "port": 3000},
+    {"url": "https://abc-8188.550c.cloud", "port": 8188}
+  ]
 }
 ```
 
-**拿到 URL 后调用：**
+- **3000 端口**：Web 界面（浏览器直接打开 ComfyUI 可视化）
+- **8188 端口**：ComfyUI 的 API 入口
+
+**调用示例**（ComfyUI API）：
 
 ```bash
-curl https://deployment-452-xxx-8000.550w.link/v1/chat/completions \
+BASE=https://abc-8188.550c.cloud
+curl -sS -X POST "$BASE/prompt" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "Qwen/Qwen3-8B-FP8",
-    "messages": [{"role": "user", "content": "hello"}]
+    "prompt": {
+      "3": {"class_type": "KSampler", "inputs": {"seed": 42, "steps": 8, "cfg": 1.0}},
+      "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "cyberpunk Tokyo street, rainy night, neon reflections, low angle"}}
+    }
+  }'
+```
+
+更简单：浏览器打开 `https://abc-3000.550c.cloud`，在 ComfyUI 里出图。
+
+**释放**：
+
+```bash
+gongji stop 1926601 -f --json
+```
+
+> 💡 追求极速（16GB 消费卡也能跑、8 步亚秒级），把模板换成 `z-image-turbo`。
+
+---
+
+### 场景 B · Qwen3.5-9B LLM 推理服务
+
+**用户原话**：
+
+```text
+帮我开一个 qwen3.5-9b 的 LLM 推理服务（vLLM，OpenAI 兼容），TTL 1 小时。
+拿到 URL 后用 OpenAI Python SDK 跑一个对话："用三句话解释 Transformer 的自注意力"。
+最后停掉任务。
+```
+
+**Agent 执行**：
+
+```bash
+gongji deploy --template qwen3.5-9b -n qwen-llm --ttl 3600 --json
+```
+
+返回：
+
+```json
+{
+  "task_id": 1926602,
+  "status": "Running",
+  "urls": [{"url": "https://xyz-8000.550c.cloud", "port": 8000}]
+}
+```
+
+**调用方式 1 · curl**：
+
+```bash
+BASE=https://xyz-8000.550c.cloud
+curl -sS "$BASE/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "Qwen/Qwen3.5-9B",
+    "messages": [{"role":"user","content":"用三句话解释 Transformer 的自注意力"}],
+    "max_tokens": 256
+  }'
+```
+
+**调用方式 2 · OpenAI Python SDK**（推荐）：
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="https://xyz-8000.550c.cloud/v1", api_key="none")
+resp = client.chat.completions.create(
+    model="Qwen/Qwen3.5-9B",
+    messages=[{"role": "user", "content": "用三句话解释 Transformer 的自注意力"}],
+)
+print(resp.choices[0].message.content)
+```
+
+**调用方式 3 · 配进别的 Agent**（当 OpenAI API 用）：
+
+```bash
+export OPENAI_BASE_URL="https://xyz-8000.550c.cloud/v1"
+export OPENAI_API_KEY="none"
+export OPENAI_MODEL="Qwen/Qwen3.5-9B"
+```
+
+之后任何支持 OpenAI 协议的客户端（Cherry Studio / Chatbox / OpenWebUI / LangChain / LlamaIndex）都能直连这台 GPU。
+
+**释放**：
+
+```bash
+gongji stop 1926602 -f --json
+```
+
+> 💡 更强推理 → `qwen3.5-27b`（4×4090 或 8×4090）；更便宜 → `qwen3.5-0.8b`。
+
+---
+
+### 场景 C · LLM + Image 组合（让 LLM 写提示词 → Z-Image 生成图）
+
+**用户原话**：
+
+```text
+我想做一个"一句话出图"的流水线：
+1. 用 qwen3.5-9b 把中文描述扩写成高质量英文 SD 提示词；
+2. 用 z-image 按这个提示词出 4 张图；
+3. 下载到 ./out/ 并打印文件路径；
+4. 两个 GPU 任务都 --ttl 1800，结束时 gongji stop --all -f。
+
+我的描述："夏日黄昏的海边小镇，暖色调，胶片质感"
+```
+
+**Agent 执行（骨架）**：
+
+```bash
+LLM=$(gongji deploy --template qwen3.5-9b -n prompt-llm --ttl 1800 --json)
+IMG=$(gongji deploy --template z-image    -n zimg       --ttl 1800 --json)
+
+LLM_URL=$(echo "$LLM" | jq -r '.urls[0].url')
+IMG_URL=$(echo "$IMG" | jq -r '.urls[] | select(.port==8188) | .url')
+
+PROMPT_EN=$(curl -sS "$LLM_URL/v1/chat/completions" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"Qwen/Qwen3.5-9B","messages":[{"role":"user","content":"扩写为英文 SD 提示词：夏日黄昏的海边小镇，暖色调，胶片质感"}]}' \
+  | jq -r '.choices[0].message.content')
+
+echo "Prompt: $PROMPT_EN"
+# 然后调 ComfyUI API 出图（略）...
+
+gongji stop --all -f --json
+```
+
+---
+
+### 场景 D · Qwen3-VL 多模态视觉理解
+
+**用户原话**：
+
+```text
+部署 qwen3-8b-vl（Qwen3-VL 视觉语言模型），TTL 1 小时。
+拿到 URL 后，给这张图 https://example.com/cat.jpg 生成一段中文描述。结束后停任务。
+```
+
+**Agent 执行**：
+
+```bash
+gongji deploy --template qwen3-8b-vl -n vlm --ttl 3600 --json
+```
+
+**调用**（OpenAI 协议多模态消息）：
+
+```bash
+curl -sS "$BASE/v1/chat/completions" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "Qwen/Qwen3-VL-8B-Instruct-FP8",
+    "messages": [{
+      "role": "user",
+      "content": [
+        {"type":"image_url","image_url":{"url":"https://example.com/cat.jpg"}},
+        {"type":"text","text":"用中文详细描述这张图片"}
+      ]
+    }]
   }'
 ```
 
 ---
 
-### `list` — 列任务
+### 场景 E · Whisper 语音转文字
 
-```bash
-gongji list                           # 运行中 + 待启动（默认）
-gongji list -s Running                # 只看运行中
-gongji list -s Running,Pending,Paused # 含暂停的
-gongji list --json
+**用户原话**：
+
+```text
+帮我把 ./meeting.mp3 转成文字。用 gongji 部署 whisper，TTL 1 小时，转完停任务。
 ```
 
-**参数：**
+**Agent 执行**：
 
-| 参数 | 说明 | 默认 |
+```bash
+gongji deploy --template whisper -n asr --ttl 3600 --json
+# → URL 端口 9000
+
+curl -sS -X POST "$BASE/asr?task=transcribe&language=zh&output=txt" \
+  -F "audio_file=@./meeting.mp3" \
+  -o meeting.txt
+
+gongji stop <task_id> -f --json
+```
+
+---
+
+### 场景 F · IndexTTS 文本转语音
+
+**用户原话**：
+
+```text
+用 indextts 把 "欢迎使用共绩算力弹性 GPU" 合成为语音，保存 welcome.wav。
+```
+
+**Agent 执行**：
+
+```bash
+gongji deploy --template indextts -n tts --ttl 1800 --json
+# → 端口 7860 的 Gradio / API 界面
+```
+
+IndexTTS 默认通过 Gradio WebUI 使用（浏览器打开 URL 直接合成）；如需脚本化：
+
+```python
+from gradio_client import Client
+
+c = Client("https://xxx-7860.550c.cloud")
+wav_path = c.predict(text="欢迎使用共绩算力弹性 GPU", api_name="/infer")
+print(wav_path)
+```
+
+---
+
+### 场景 G · MinerU 批量 PDF 解析为 Markdown
+
+**用户原话**：
+
+```text
+帮我把 ./papers/ 目录下的 10 个 PDF 全部用 mineru 转成 Markdown，输出到 ./md/，最后停任务。
+```
+
+**Agent 执行**：
+
+```bash
+gongji deploy --template mineru -n pdf --ttl 3600 --json
+# → 端口 8000 的 REST API
+
+for f in ./papers/*.pdf; do
+  name=$(basename "$f" .pdf)
+  curl -sS -X POST "$BASE/file_parse" \
+    -F "files=@$f" -F "return_md=true" \
+    | jq -r '.md_content' > "./md/$name.md"
+done
+
+gongji stop <task_id> -f --json
+```
+
+---
+
+### 场景 H · WAN 2.2 文生视频 / 图生视频
+
+**用户原话**：
+
+```text
+用 wan2.2 帮我生成一段 5 秒视频："一只柯基在樱花树下奔跑，慢动作"。
+TTL 1 小时，生成完下载到 ./out/corgi.mp4 并停任务。
+```
+
+**Agent 执行**：
+
+```bash
+gongji deploy --template wan2.2 -n video --ttl 3600 --json
+# → 浏览器打开 URL 3000 端口即可使用 ComfyUI
+# 或走 8188 API 投递工作流 JSON
+```
+
+> 💡 图生视频请改用 `wan2.2-i2v` 模板。
+
+---
+
+### 场景 I · FLUX.2 高质量文生图
+
+**用户原话**：
+
+```text
+我要高质量出图，用 flux2-dev，TTL 1 小时。
+提示词："a photorealistic portrait of an astronaut on Mars, golden hour"。
+```
+
+**Agent 执行**：
+
+```bash
+gongji deploy --template flux2-dev -n flux --ttl 3600 --json
+# → 端口 3000 / 8188，使用方式同 z-image
+```
+
+---
+
+### 场景 J · Ubuntu 开发环境 + Jupyter
+
+**用户原话**：
+
+```text
+帮我开一台带 GPU 的 Jupyter 环境，TTL 2 小时。拿到 URL 后打印出来我自己去用。
+```
+
+**Agent 执行**：
+
+```bash
+gongji deploy --template jupyter -n dev --ttl 7200 --json
+# → 8888 是 Jupyter，62661 是 code-server
+```
+
+---
+
+### 场景 K · LLaMA Factory 模型微调
+
+**用户原话**：
+
+```text
+我想用 LLaMA Factory 在 4090 上跑一次 LoRA 微调实验，TTL 4 小时。
+拿到 URL 后我自己进 WebUI 配数据集和参数。
+```
+
+**Agent 执行**：
+
+```bash
+gongji deploy --template llama-factory -n finetune --ttl 14400 --json
+# → 7860 Gradio WebUI，8000 API
+```
+
+进 7860 WebUI 即可可视化配训练、推理、合并 LoRA。微调产物挂载到平台共享存储或直接下载。
+
+---
+
+### 场景 L · ACE-Step 音乐生成
+
+**用户原话**：
+
+```text
+用 acestep 给我生成一段 30 秒的电子舞曲，120 BPM。TTL 30 分钟。
+```
+
+**Agent 执行**：
+
+```bash
+gongji deploy --template acestep -n music --ttl 1800 --json
+# → 7865 端口 Gradio
+```
+
+浏览器打开生成。如需脚本化，用 `gradio_client` 类似场景 F。
+
+---
+
+## 4. 生产模板：PDF-QA 流水线
+
+如果你在构建一个真实产品（比如"PDF 问答机器人"），通常要同时拉起多个服务：
+
+| 需求 | 模板 | 端口 |
 |------|------|------|
-| `--status, -s` | 筛选状态（Running/Pending/Paused/End），逗号分隔 | `Running,Pending` |
-| `--json, -j` | JSON 输出 | - |
+| PDF 解析 | `mineru` | 8000 |
+| 向量化 + LLM 问答 | `qwen3.5-9b` | 8000 |
+| 多模态 OCR（含表格公式） | `paddleocr-vl` | 8080 |
 
-**输出：**
+**粘给 Agent**：
 
+```text
+帮我拉起一条 PDF-QA 流水线：
+1. 部署 mineru（--ttl 7200，名字 pdf-parse）
+2. 部署 qwen3.5-9b（--ttl 7200，名字 qa-llm）
+3. 都成功后把两个 URL 写到 .env：MINERU_URL=xxx  LLM_URL=xxx
+4. 写一个 run.py：用户输入问题 → 自动解析 ./docs/ 下 PDF 提取文本 → 作为 context 丢给 LLM → 返回答案
+5. 今晚结束后帮我 gongji stop --all -f
 ```
-[1926525] my-llm  Running  节点 1/1  4090 x1
-  -> https://deployment-452-xxx-8000.550w.link (:8000)
-[1926530] sd-svc  Pending  节点 0/1  4090 x1
-```
 
-**JSON：**
-
-```json
-[
-  {
-    "task_id": 1926525,
-    "task_name": "my-llm",
-    "status": "Running",
-    "urls": [{"url": "https://...", "port": 8000}]
-  }
-]
-```
+Agent 会自动处理全部编排。
 
 ---
 
-### `status` — 任务详情
+## 5. 47 个预制模板完整清单
 
-```bash
-gongji status 1926525              # 查看状态、访问地址、费用
-gongji status 1926525 --json       # JSON 输出
-```
-
-**输出：**
-
-```
-任务ID:   1926525
-名称:     my-llm
-状态:     Running
-节点数:   1 / 1
-GPU:      4090 x1 (显存 24.0G)
-内存:     63G | CPU: 24 核
-已花费:   36.44 元
-访问地址: https://deployment-452-xxx-8000.550w.link (端口 8000)
-```
-
-`已花费` 是到目前为止的累计扣费，按秒计算，实时更新。
-
----
-
-### `logs` — 日志/事件
-
-排查部署失败或运行异常：
-
-```bash
-gongji logs 1926525                # 查看容器日志
-gongji logs 1926525 --events       # 查看事件（镜像拉取失败、OOM 等）
-```
-
-**参数：**
-
-| 参数 | 说明 |
-|------|------|
-| `task_id` | 任务 ID（必填） |
-| `--events, -e` | 查事件而非日志 |
-
-**事件输出示例：**
-
-```
-=== deployment-452-xxx-74f56c675-pk8hf (Pending) ===
-  [Warning] Failed: Error: ImagePullBackOff  (2026-04-13T10:00:00Z)
-  [Normal] Pulling: Pulling image "my-image:v1"  (2026-04-13T09:59:55Z)
-  [Normal] BackOff: Back-off pulling image  (2026-04-13T10:00:10Z)
-```
-
-事件里常见的 reason：
-- `Pulling` / `Pulled` — 正常拉镜像
-- `ImagePullBackOff` / `ErrImagePull` — 镜像拉失败（大概率地址错或内网拉不到）
-- `OOMKilled` — 容器内存超限
-- `CrashLoopBackOff` — 容器启动即崩溃
-
----
-
-### `stop` — 停止/暂停/恢复
-
-```bash
-# 删除单个
-gongji stop 1926525                # 删除（不可恢复，需确认）
-gongji stop 1926525 -f             # 强制删除
-gongji stop 1926525 -f --json      # Agent 调用
-
-# 暂停 / 恢复（不会丢配置）
-gongji stop 1926525 --pause        # 暂停（释放资源，可恢复）
-gongji stop 1926525 --resume       # 恢复暂停的任务
-
-# 批量
-gongji stop --all                  # 批量删除所有任务（需确认）
-gongji stop --all -f --json        # Agent 一键释放所有
-# → {"stopped": [1, 2, 3], "failed": []}
-```
-
-**参数：**
-
-| 参数 | 说明 |
-|------|------|
-| `task_id` | 任务 ID（与 `--all` 二选一） |
-| `--all` | 批量删除所有 Running/Pending/Paused 任务 |
-| `--pause` | 暂停（资源释放，配置保留） |
-| `--resume` | 恢复暂停的任务 |
-| `--force, -f` | 跳过确认 |
-| `--json, -j` | JSON 输出 |
-
-**单个 JSON：**
-
-```json
-{"task_id": 1926525, "action": "删除", "ok": true}
-```
-
-**批量 JSON：**
-
-```json
-{"stopped": [1926525, 1926530], "failed": []}
-```
-
----
-
-## 47 个预制模板完整清单
-
-**全部来自共绩算力镜像仓库 `harbor.suanleme.cn`，在平台内网预缓存**，拉取快、开箱即用。
+**全部来自共绩算力镜像仓库 `harbor.suanleme.cn`，平台内网预缓存**，拉取快、开箱即用。
 
 ### 大语言模型推理（llm）· 10 个
 
@@ -690,744 +624,106 @@ gongji stop --all -f --json        # Agent 一键释放所有
 |-------|------|------|
 | `dailyhot` | `dailyhot:1.0` | 6688, 80 |
 
-> 想看完整镜像地址、启动命令、环境变量、文档链接：`gongji images --json` 或查看 [docs/预制镜像清单.md](./docs/预制镜像清单.md)。
+> 完整镜像地址、启动命令、环境变量、文档链接：`gongji images --json`，或查看 [docs/预制镜像清单.md](./docs/预制镜像清单.md)。
 
 ---
 
-## 按分类一键部署手册
+## 6. Agent 一行指令参考表
 
-### 跑 LLM 推理
-
-```bash
-# 轻量：Qwen3.5-0.8B，边缘/低延时
-gongji deploy --template qwen3.5-0.8b -n my-llm --ttl 3600 --json
-
-# 主力：Qwen3.5-9B（最常用，单卡 4090）
-gongji deploy --template qwen3.5-9b -n my-llm --ttl 3600 --json
-
-# 大模型：Qwen3.5-27B（4×4090 或 8×4090）
-gongji deploy --template qwen3.5-27b -n big-llm -c 8 --ttl 3600 --json
-
-# 通用 vLLM：自己指定 model（覆盖默认启动命令）
-gongji deploy --template vllm -n custom-llm \
-  --start-args "-c 'vllm serve your-org/your-model --max-model-len 32K'"
-
-# Ollama 服务
-gongji deploy --template ollama -n ol --ttl 3600 --json
-# 部署后进容器 pull 模型：ollama pull llama3.1
-```
-
-拿到 URL 调用：
-
-```bash
-URL="https://deployment-xxx.550w.link"
-curl $URL/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"Qwen/Qwen3-8B-FP8","messages":[{"role":"user","content":"hello"}]}'
-```
-
-### 生成图片
-
-```bash
-# Qwen-Image（阿里 20B 文生图）
-gongji deploy --template qwen-image -n img-svc --json
-
-# Flux.2（多参考图一致性）
-gongji deploy --template flux2-dev -n flux --json
-
-# SD 3.5 + ComfyUI
-gongji deploy --template sd3.5-comfyui -n sd35 --json
-
-# Flux.1 Krea（更真实，无 AI 味）
-gongji deploy --template flux1-krea -n krea --json
-```
-
-### 生成视频
-
-```bash
-# 阿里 WAN 2.2（270 亿 MoE）
-gongji deploy --template wan2.2 -n video --json
-
-# 图生视频
-gongji deploy --template wan2.2-i2v -n i2v --json
-```
-
-### 语音处理
-
-```bash
-# Whisper 语音识别
-gongji deploy --template whisper -n asr --ttl 7200 --json
-
-# IndexTTS 中英高质量 TTS
-gongji deploy --template indextts -n tts --json
-
-# CosyVoice 近真人合成
-gongji deploy --template cosyvoice -n voice --json
-```
-
-### 文档解析 / OCR
-
-```bash
-# MinerU PDF → Markdown
-gongji deploy --template mineru -n pdf-parse --ttl 14400 --json
-
-# PaddleOCR-VL 轻量文档解析
-gongji deploy --template paddleocr-vl -n ocr --json
-```
-
-### 开发 / 训练
-
-```bash
-# Ubuntu 24.04 + Jupyter + code-server
-gongji deploy --template ubuntu2404 -n dev --json
-
-# LLaMA Factory 无代码微调
-gongji deploy --template llama-factory -n finetune --json
-```
-
-### 图像编辑 / 人像
-
-```bash
-# Qwen Image Edit
-gongji deploy --template qwen-image-edit -n edit --json
-
-# FaceFusion 换脸
-gongji deploy --template facefusion -n face --json
-
-# 证件照
-gongji deploy --template hivision-idphotos -n idphoto --json
-
-# 肖像动画
-gongji deploy --template hunyuan-portrait -n portrait --json
-```
-
-### 3D 重建
-
-```bash
-gongji deploy --template hunyuan-world-mirror -n 3d --json
-```
-
-### 音乐生成
-
-```bash
-gongji deploy --template acestep -n music --json
-```
+| 你想干什么 | 粘给 Agent 的话 |
+|----------|--------------|
+| 开个 LLM | `gongji 帮我部署 qwen3.5-9b，ttl 一小时，给我 OpenAI 接入地址` |
+| 开个生图 | `gongji 帮我开 z-image-turbo，ttl 半小时，浏览器 URL 发我` |
+| 开个 VLM | `gongji 部署 qwen3-8b-vl，ttl 一小时` |
+| 开个 ASR | `gongji 部署 whisper，ttl 一小时，转 ./a.mp3` |
+| 开个 TTS | `gongji 部署 indextts，ttl 一小时` |
+| 开个视频 | `gongji 部署 wan2.2，ttl 两小时` |
+| 开个 OCR | `gongji 部署 mineru，ttl 一小时，转 ./a.pdf` |
+| 开个 Jupyter | `gongji 部署 jupyter，ttl 两小时` |
+| 微调一个模型 | `gongji 部署 llama-factory，ttl 四小时` |
+| 列所有模板 | `gongji images --json` |
+| 查 GPU 库存 | `gongji resources --json` |
+| 看花了多少钱 | `gongji status <id> --json` 看 `billing_value` |
+| 释放所有 | `gongji stop --all -f --json` |
 
 ---
 
-## Python API
-
-### 基础用法
-
-```python
-from gongjiskills import GongjiClient
-
-client = GongjiClient()  # 自动读取 ~/.gongji/config.json
-```
-
-### 查资源
-
-```python
-res = client.search_resources()
-# {"code": "0000", "data": {"results": [...]}}
-
-for device in res["data"]["results"]:
-    for region in device.get("regions", []):
-        if region["inventory"] > 0:
-            print(f"{device['gpu_name']} x{device['gpu_count']} "
-                  f"| {region['region_name']} "
-                  f"| {region['inventory']} "
-                  f"| {region['discount_price'] * 3600 / 1e6:.2f} 元/h")
-            break
-```
-
-### 用模板创建任务
-
-```python
-from gongjiskills.templates import BUILTIN_TEMPLATES
-import time
-
-# 1. 选模板
-tmpl = BUILTIN_TEMPLATES["qwen3.5-9b"]
-
-# 2. 挑资源
-res = client.search_resources()
-for device in res["data"]["results"]:
-    if tmpl.get("gpu") and tmpl["gpu"] not in device["gpu_name"]:
-        continue
-    for region in device.get("regions", []):
-        if region["inventory"] > 0:
-            mark = region["mark"]["mark"]
-            break
-    else:
-        continue
-    break
-
-# 3. 建任务
-ports = [int(p) for p in tmpl["port"].split(",")]
-task = client.create_task(
-    task_name="my-llm",
-    mark=mark,
-    service_image=tmpl["image"],
-    ports=ports,
-    env=tmpl.get("env"),
-    command=tmpl.get("start_cmd"),
-    args=tmpl.get("start_args"),
-)
-task_id = task["data"]["task_id"]
-
-# 4. 等就绪
-while True:
-    detail = client.task_detail(task_id)
-    status = detail["data"]["status"]
-    if status == "Running":
-        break
-    if status in ("End", "Other"):
-        raise RuntimeError(f"任务失败: {status}")
-    time.sleep(5)
-
-# 5. 拿 URL
-url = detail["data"]["services"][0]["remote_ports"][0]["url"]
-print(f"Endpoint: {url}")
-
-# 6. 调用
-import openai
-ai = openai.OpenAI(base_url=f"{url}/v1", api_key="none")
-resp = ai.chat.completions.create(
-    model="Qwen/Qwen3.5-9B",
-    messages=[{"role": "user", "content": "hello"}]
-)
-
-# 7. 释放
-client.stop_task(task_id)
-```
-
-### 异常处理
-
-```python
-from gongjiskills.client import GongjiError
-
-try:
-    res = client.create_task(...)
-except GongjiError as e:
-    # 网络错误 / API 错误已被友好化
-    print(f"部署失败: {e}")
-```
-
-### 查日志 / 事件
-
-```python
-# 节点列表
-points = client.list_points(task_id)["data"]["results"]
-point_id = points[0]["point_id"]
-
-# 事件（排查失败）
-events = client.pod_event(point_id)["data"]["events"]
-for ev in events:
-    print(f"[{ev['type']}] {ev['reason']}: {ev['message']}")
-
-# 容器日志
-service_id = detail["data"]["services"][0]["service_id"]
-logs = client.point_log(task_id, point_id, service_id)["data"]["logs"]
-print(logs)
-```
-
-### 完整 API 列表
-
-| 方法 | 说明 |
-|------|------|
-| `search_resources()` | 查所有可用 GPU 资源 |
-| `create_task(...)` | 创建任务 |
-| `task_detail(task_id)` | 任务详情 |
-| `search_tasks(status=...)` | 查询任务列表 |
-| `pause_task(task_id)` | 暂停任务 |
-| `recover_task(task_id)` | 恢复暂停的任务 |
-| `stop_task(task_id)` | 删除任务 |
-| `update_task(body)` | 更新任务配置 |
-| `list_points(task_id)` | 节点列表 |
-| `point_log(task_id, point_id, service_id)` | 节点日志 |
-| `pod_event(point_id)` | 节点事件 |
-
-详见源码 `gongjiskills/client.py`。
-
----
-
-## 在 Claude Code 中使用
-
-项目自带 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) Skill 定义（`skills/gongji.md`）。
-
-### 配置方式
-
-把 `skills/gongji.md` 复制到 Claude Code 的 skills 目录，或者在项目根目录保留让 Claude Code 自动发现。
-
-### 自然语言示例
-
-直接对 Claude Code 说：
-
-- "帮我部署一个 4090 跑 Qwen 推理" → `gongji deploy --template qwen3.5-9b -n xxx --ttl 3600 --json`
-- "开个 ComfyUI 到广东区域" → `gongji deploy --template flux1-dev-comfyui -n xxx -r 广东 --json`
-- "看看我现在有哪些任务在跑" → `gongji list --json`
-- "任务 1926525 花了多少钱" → `gongji status 1926525 --json`
-- "把任务停掉" → `gongji stop <id> -f --json`
-- "跑个 Whisper 语音识别，1 小时后关" → `gongji deploy --template whisper -n xxx --ttl 3600 --json`
-- "列出所有 LLM 模板" → `gongji images --category llm --json`
-
-Agent 会自动走：
-1. 用户说需求 → Claude 理解意图
-2. 必要时 `gongji images categories` / `--category` 找合适模板
-3. `gongji deploy --template <name> -n xxx --ttl 3600 --json` 部署
-4. 返回 URL 给用户，或直接 `curl` 调用
-
----
-
-## Agent / JSON 契约
-
-所有命令都支持 `--json`。**Agent 调用时务必加上**。
-
-### 成功输出
+## 7. 任务管理与释放
 
 ```bash
-# deploy
-gongji deploy --template vllm -n svc --json
-# → {"task_id": 1926525, "status": "Running",
-#    "urls": [{"url": "https://xxx", "port": 8000}],
-#    "ttl_seconds": 3600, "auto_release_pid": 12345}
+gongji list --json                 # 当前在跑的任务
+gongji status <id> --json          # 某个任务的详情 + 当前花费
+gongji logs <id>                   # 看容器日志
+gongji logs <id> --events          # 看调度事件（排查启动失败）
+gongji stop <id> -f --json         # 释放单个
+gongji stop --all -f --json        # 一键全部释放
+```
 
-# list
+**强烈建议 Agent 每次 deploy 都带 `--ttl`**，即便忘记 stop，也会到时间自动释放。
+
+完整参数见 [docs/cli-reference.md](./docs/cli-reference.md)。
+
+---
+
+## 8. 省钱与稳定性建议
+
+1. **永远带 `--ttl`**：一次性任务 `--ttl 3600`（1 小时），开发环境 `--ttl 7200`（2 小时）。按秒计费的现实是 4×4090 忘了关一晚上 ≈ ¥96。
+2. **优先用 `-turbo` 系列**：同样效果，价格减半。
+3. **别指定区域**：deploy 默认选最便宜的有库存节点；强行 `-r 广东` 可能拿不到库存或贵一点。
+4. **多卡模型**：`qwen3.5-27b` / `hunyuan-image-3` 这类要 4×/8× GPU，deploy 时平台自动对齐，不要手动改 `-c`。
+5. **Agent 批处理完自觉 stop**：让 Agent 把 `gongji stop <id> -f` 放在脚本末尾或 `trap EXIT` 里。
+6. **一键回收**：结束一天工作说一句"帮我把共绩算力上所有任务都停了"即可。
+
+---
+
+## 9. 常见问题
+
+**Q: Agent 报 token 失效 / 签名错误？**
+让 Agent 执行 `GONGJI_TOKEN=<新 token> gongji init --force`，或去官网 → API 密钥 → 重新生成。
+
+**Q: Agent 报库存不足？**
+换模板（比如 `qwen3.5-9b` 改 `qwen3.5-0.8b`），或换区域 `-r 河南`，或稍等 1-2 分钟重试。
+
+**Q: 余额不足？**
+去 gongjiyun.com 充值，¥10-20 够跑一整天试验。
+
+**Q: 部署卡在 Pending？**
+`gongji logs <id> --events` 看事件；常见是镜像拉取 / 资源等待，一般 30-60 秒内就绪。
+
+**Q: 部署 5 分钟超时但 JSON 仍返回 `status: Pending`？**
+任务已在平台创建，没有变成孤儿任务。继续 `gongji status <id>` 等就绪；不需要就 `gongji stop <id> -f`。
+
+**Q: Agent 能不能只用 Python 而不用 CLI？**
+可以。`from gongjiskills import GongjiClient` 之后调 `client.create_task(...)`。详见 [docs/python-api.md](./docs/python-api.md)。
+
+**Q: 我想给团队统一接入？**
+让 Agent 把 URL 写到你的 `.env` / Vault / 秘密管理器里；或者直接让 LLM URL 配成内部 OpenAI 代理。
+
+**Q: 凭据怎么保护？密钥泄露怎么办？**
+私钥默认 600 权限存在 `~/.gongji/`。担心泄露 → 控制台重新生成 token + `gongji init --force` 换密钥对。详见 [docs/security.md](./docs/security.md)。
+
+---
+
+## 附：速查一行命令
+
+```bash
+# 安装
+curl -fsSL https://raw.githubusercontent.com/shaozheng0503/gongjiskills/main/install.sh | bash
+
+# 配置
+GONGJI_TOKEN=xxx gongji init --force
+
+# 开一个 z-image 生图 + qwen3.5-9b LLM（组合）
+gongji deploy --template z-image    -n img --ttl 3600 --json
+gongji deploy --template qwen3.5-9b -n llm --ttl 3600 --json
+
+# 查看 / 释放
 gongji list --json
-# → [{"task_id": 1926525, "task_name": "svc", "status": "Running",
-#     "urls": [{"url": "https://xxx", "port": 8000}]}]
-
-# status
-gongji status 1926525 --json
-# → 完整的任务详情 JSON（包含 resources/services/billing_value 等）
-
-# stop 单个
-gongji stop 1926525 -f --json
-# → {"task_id": 1926525, "action": "删除", "ok": true}
-
-# stop 批量
 gongji stop --all -f --json
-# → {"stopped": [1926525, 1926530], "failed": []}
-
-# images
-gongji images --json
-# → {"vllm": {"image": "...", "category": "llm", ...}, ...}
-
-# categories
-gongji images categories --json
-# → {"llm": 10, "image-gen": 10, "video": 3, ...}
-
-# resources
-gongji resources --json
-# → [{"gpu_name": "4090", "gpu_count": 1, "regions": [...]}, ...]
-```
-
-### 失败输出
-
-所有失败都是 `{"error": "..."}`，exit code 1：
-
-```bash
-gongji deploy --template not-exist -n svc --json
-# → {"error": "模板 [not-exist] 不存在，用 gongji images 查看可用模板"}
-# exit 1
-
-gongji deploy bad-image -n svc --json
-# → {"error": "查询资源失败: token expired"}
-# exit 1
-```
-
-### Agent 调用模板
-
-```python
-import json, subprocess
-
-def gongji(*args):
-    """调用 gongji CLI，返回解析后的 JSON 或抛异常"""
-    result = subprocess.run(
-        ["gongji", *args, "--json"],
-        capture_output=True, text=True
-    )
-    data = json.loads(result.stdout)
-    if "error" in data:
-        raise RuntimeError(data["error"])
-    return data
-
-# 发现
-categories = gongji("images", "categories")
-# {"llm": 10, ...}
-
-llm_templates = gongji("images", "--category", "llm")
-# {"vllm": {...}, "qwen3.5-9b": {...}, ...}
-
-# 部署
-result = gongji("deploy", "--template", "qwen3.5-9b",
-                "-n", "agent-task", "--ttl", "3600")
-url = result["urls"][0]["url"]
-
-# 用完释放
-gongji("stop", str(result["task_id"]), "-f")
 ```
 
 ---
 
-## 可靠性与错误处理
+祝玩得开心。有任何问题丢回给 Agent，它会带着本手册自动排查。
 
-### 自动重试
-
-瞬时错误自动重试 2 次（指数退避 1s → 2s）：
-
-- 连接失败（`ConnectionError`）
-- 请求超时（`Timeout`，30s）
-- HTTP 5xx（500/502/503/504）
-
-Agent 不需要自己写重试。
-
-### 友好错误映射
-
-底层 API 错误码被翻译成中文 + 修复建议：
-
-| 原始错误 | 翻译 + 建议 |
-|---------|-----------|
-| `token expired` | "Token 已失效，请登录 https://www.gongjiyun.com 重新生成，再运行: `gongji init --force`" |
-| `signature invalid` | "签名验证失败：公钥可能未上传到控制台，检查 `~/.gongji/public.pem` 是否与平台一致" |
-| `not found` | "资源不存在，用 `gongji list` 确认 task_id 是否正确" |
-| `insufficient balance` | "账户余额不足，请前往控制台充值后重试" |
-| `inventory not enough` | "库存不足，换个区域或 GPU 型号重试（`gongji resources` 查看库存）" |
-
-### 部署等待
-
-`deploy` 默认等到 `Running` 才返回（最多 5 分钟，每 5 秒轮询一次）：
-
-- 连续 3 次查询失败才报错（防网络抖动）
-- 任务进入 `End` / `Other` 异常状态 → **自动拉取失败原因**并输出
-- 超时 → 提示手动用 `gongji status <id>` 检查
-
-### TTL 守护
-
-`--ttl` 启动独立子进程：
-
-```python
-# cli.py 内部实现示意
-subprocess.Popen(
-    [sys.executable, "-c", "import time; time.sleep(ttl); stop_task(tid)"],
-    start_new_session=True,  # 独立进程组
-    stdout=log_file, stderr=log_file,
-)
-```
-
-- CLI 退出不影响
-- 日志在 `~/.gongji/ttl/<task_id>.log`
-- PID 在 `~/.gongji/ttl/<task_id>.pid`
-- 手动取消：`kill <pid>`
-
----
-
-## 安全
-
-### 凭据保护
-
-| 文件 | 权限 | 说明 |
-|------|------|------|
-| `~/.gongji/` | `700` | 仅当前用户可访问 |
-| `~/.gongji/private.key` | `600` | RSA 私钥 |
-| `~/.gongji/config.json` | `600` | 含 token |
-| `~/.gongji/public.pem` | `644` | 公钥（不敏感） |
-
-加载配置时**自动检测权限**，过宽时输出警告和修复命令：
-
-```
-⚠️  警告：~/.gongji/private.key 权限过宽 (644)，可能被其他用户读取
-  修复：chmod 600 ~/.gongji/private.key
-```
-
-### Token 传入方式（按安全性）
-
-1. **环境变量**（最推荐）：`GONGJI_TOKEN=xxx gongji init --force`
-2. **stdin 管道**：`echo $TOKEN | gongji init --force`
-3. **命令行参数**：`gongji init --token xxx`（会进 shell history）
-4. **交互输入**：默认情况，终端打星号
-
-### RSA 签名
-
-每次请求都签名：
-
-```
-sign_string = f"{path}\n{version}\n{timestamp}\n{token}\n{body}"
-signature = RSA_PKCS1v15_SHA256(private_key, sign_string)
-```
-
-- `timestamp` 每次不同，防重放
-- 请求不可伪造（签名必须由私钥生成，私钥只在客户端本地）
-
----
-
-## 成本控制
-
-**按秒计费的现实：** 一个 4×4090 任务忘了关一晚上 ≈ ¥96。三道防护：
-
-### 1. `--ttl` 强制到期释放
-
-```bash
-# 一次性任务默认加 --ttl 3600（1 小时）
-gongji deploy --template vllm -n tmp --ttl 3600 --json
-```
-
-### 2. `gongji status <id>` 实时看花费
-
-```
-已花费:   36.44 元
-```
-
-### 3. `gongji stop --all` 一键全关
-
-```bash
-gongji stop --all -f --json
-# → {"stopped": [1, 2, 3], "failed": []}
-```
-
-### 推荐实践
-
-- **Agent 永远带 `--ttl`**，默认 1 小时
-- **shell alias**：`alias gcs="gongji stop --all -f"`
-- **CI 场景**：`finally` / `trap` 里一定调 `stop`
-- **定时清理**：cron 每天 `gongji list --json` 报警未释放任务
-
----
-
-## 项目结构
-
-```
-gongjiskills/
-├── README.md                # 这份文档
-├── LICENSE                  # MIT
-├── setup.py / pyproject.toml  # Python 打包配置
-├── requirements.txt         # 依赖
-├── install.sh               # 一键安装脚本
-├── gongji.py                # 兼容入口（python3 gongji.py xxx）
-│
-├── gongjiskills/            # Python 包
-│   ├── __init__.py          # 导出 GongjiClient
-│   ├── auth.py              # RSA-SHA256 签名 + 权限检查
-│   ├── client.py            # API 客户端 + 网络错误处理 + 重试
-│   ├── cli.py               # CLI 实现（8 个命令）
-│   └── templates.py         # 47 个内置模板 + 分类
-│
-├── tests/                   # pytest 测试
-│   ├── test_cli.py          # CLI 参数解析 + JSON 契约 + 分类
-│   └── test_auth.py         # 签名验证 + 配置加载
-│
-├── skills/
-│   └── gongji.md            # Claude Code Skill 定义
-│
-└── docs/                    # 补充文档
-    ├── 介绍.md              # 完整介绍（给别人看）
-    └── 预制镜像清单.md      # 46 个平台预制镜像详细清单
-```
-
----
-
-## 开发与测试
-
-```bash
-# 本地开发
-git clone https://github.com/shaozheng0503/gongjiskills.git
-cd gongjiskills
-pip install -e .
-
-# 跑测试（34 个）
-python3 -m pytest tests/ -v
-
-# 只跑 CLI 测试
-python3 -m pytest tests/test_cli.py -v
-
-# 只跑签名测试
-python3 -m pytest tests/test_auth.py -v
-```
-
-### 添加新的内置模板
-
-1. 编辑 `gongjiskills/templates.py`
-2. 在 `BUILTIN_TEMPLATES` 加新条目：
-   ```python
-   "my-template": {
-       "image": "harbor.suanleme.cn/public-hub/xxx",
-       "category": "llm",  # 选一个现有分类
-       "description": "...",
-       "port": "8000",
-       "gpu": "4090",
-       "env": "KEY=VAL",
-       "start_cmd": "/bin/bash",
-       "start_args": ["-c", "..."],
-       "docs": "https://...",
-   },
-   ```
-3. 跑测试 `python3 -m pytest tests/test_cli.py -v`
-
-测试会自动断言：
-- 所有模板的 `image` 必须以 `harbor.suanleme.cn/` 开头（防止误加上游假镜像）
-- 所有模板必须有合法的 `category`
-
----
-
-## 常见问题（FAQ）
-
-<details>
-<summary><b>Q: 报错"配置文件不存在"</b></summary>
-
-运行 `gongji init` 初始化。详细步骤见 [快速开始](#快速开始)。
-</details>
-
-<details>
-<summary><b>Q: 报错"token expired"</b></summary>
-
-登录 [控制台](https://www.gongjiyun.com) 重新生成 API 密钥，然后 `gongji init --force`。
-</details>
-
-<details>
-<summary><b>Q: 报错"签名验证失败 / signature invalid"</b></summary>
-
-1. 检查 `~/.gongji/public.pem` 内容是否和控制台上传的一致
-2. 检查系统时间是否准确（签名包含 timestamp，误差大于几分钟会失败）
-3. 最后手段：`gongji init --force` 重新生成密钥对并上传新公钥
-</details>
-
-<details>
-<summary><b>Q: 报错"权限过宽"</b></summary>
-
-运行提示中的 `chmod` 命令修复，或重新 `gongji init --force`（会自动设置正确权限）。
-</details>
-
-<details>
-<summary><b>Q: 部署后拿不到访问地址</b></summary>
-
-1. 任务可能还在拉镜像（首次拉镜像可能 1-3 分钟）
-2. `deploy` 默认等到 Running 才返回，如果超时了：`gongji status <id>` 看当前状态
-3. 排查：`gongji logs <id> --events` 看事件（镜像拉取失败 / OOM / 启动崩溃）
-</details>
-
-<details>
-<summary><b>Q: 部署失败，报 ImagePullBackOff</b></summary>
-
-平台拉不到镜像。常见原因：
-1. **用了上游 docker hub / ghcr 的镜像地址** → 换用 `gongji images` 里的预制模板（只用 `harbor.suanleme.cn/*`）
-2. 镜像地址拼错 → 仔细检查
-3. 私有镜像没授权 → 用 Python API `create_task(repository_username=..., repository_password=...)`
-</details>
-
-<details>
-<summary><b>Q: 怎么指定 GPU 卡数和区域</b></summary>
-
-```bash
-gongji deploy --template xxx -n svc -g 4090 -c 4 -r 广东
-#                              型号      卡数   区域
-```
-</details>
-
-<details>
-<summary><b>Q: 怎么看已经花了多少钱</b></summary>
-
-`gongji status <id>` 会显示累计花费（精确到秒）。
-</details>
-
-<details>
-<summary><b>Q: 怎么传复杂的启动命令（带引号、环境变量、命令替换）</b></summary>
-
-两种方式：
-
-```bash
-# 方式 1：命令行
-gongji deploy <image> -n svc \
-  --env "FOO=bar BAZ=qux" \
-  --start-cmd "/bin/bash" \
-  --start-args "-c 'vllm serve model --port 8000'"
-```
-
-```python
-# 方式 2：自定义模板（推荐，长命令放 JSON 里更稳）
-gongji images add my-custom \
-  --image harbor.suanleme.cn/xxx \
-  --start-cmd /bin/bash \
-  --start-args "-c 'vllm serve ...'"
-gongji deploy --template my-custom -n svc
-```
-</details>
-
-<details>
-<summary><b>Q: `--ttl` 在什么情况下会失效</b></summary>
-
-守护进程是普通子进程，下面情况会丢：
-- 机器关机 / 重启
-- 账户注销 / logout
-- 进程被 `kill`
-- 磁盘写满导致进程 crash
-
-**建议重要任务做二次保险**：cron 里定时 `gongji stop <id>`，或在代码的 `finally` 里兜底。
-</details>
-
-<details>
-<summary><b>Q: 能挂载持久化存储吗</b></summary>
-
-能。CLI 目前没暴露这个参数，需走 Python API：
-
-```python
-client.create_task(
-    ...,
-    storage_config=[{"mount_path": "/data", "size_gb": 50}],
-    share_storage_config=[{"mount_path": "/shared", "storage_id": "xxx"}],
-)
-```
-</details>
-
-<details>
-<summary><b>Q: 怎么切换多账号</b></summary>
-
-目前 `~/.gongji/` 是硬编码。一个变通方式是用不同用户跑。需求强烈可以提 Issue，加环境变量 `GONGJI_DIR` 支持。
-</details>
-
-<details>
-<summary><b>Q: pip install 报 "cryptography 安装失败"</b></summary>
-
-macOS 上常见。先装系统依赖：
-
-```bash
-# macOS
-brew install openssl rust
-export LDFLAGS="-L$(brew --prefix openssl)/lib"
-export CPPFLAGS="-I$(brew --prefix openssl)/include"
-
-# Ubuntu/Debian
-sudo apt install -y build-essential libssl-dev libffi-dev python3-dev
-```
-
-然后重试 `pip install`。
-</details>
-
-<details>
-<summary><b>Q: 能部署多节点（多副本）吗</b></summary>
-
-能：
-
-```bash
-gongji deploy --template whisper -n asr-cluster --points 3 --json
-```
-
-但要**模板本身支持多节点**（描述里不带"单节点"字样）。平台会自动负载均衡。
-</details>
-
----
-
-## License
-
-MIT — 见 [LICENSE](./LICENSE)
-
----
-
-## 反馈 / 贡献
-
-- 使用中遇到问题 → [提 Issue](https://github.com/shaozheng0503/gongjiskills/issues)
-- 想加预制镜像 → 告诉镜像 ID，我补到 `templates.py`
-- 想扩展 Python API → 看 `client.py`，欢迎 PR
-- 想做 Web UI / Dashboard → 基于 Python API 开发即可
-
-如果这个工具省了你的时间，欢迎点 Star ⭐
+**License**: MIT — 见 [LICENSE](./LICENSE) · **反馈**: [Issues](https://github.com/shaozheng0503/gongjiskills/issues)
