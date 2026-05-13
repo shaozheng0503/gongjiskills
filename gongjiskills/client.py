@@ -26,8 +26,8 @@ def _friendly_error(msg: str) -> str:
         return f"{msg}\n  → Token 已失效，请登录 https://www.gongjiyun.com 重新生成，再运行: gongji init --force"
     if "signature" in m or "sign" in m:
         return f"{msg}\n  → 签名验证失败：公钥可能未上传到控制台，检查 ~/.gongji/public.pem 是否与平台一致"
-    if "not found" in m or "不存在" in m:
-        return f"{msg}\n  → 资源不存在，用 gongji list 确认 task_id 是否正确"
+    if ("not found" in m or "不存在" in m) and ("task" in m or "任务" in m):
+        return f"{msg}\n  → 任务不存在，用 gongji list 确认 task_id 是否正确"
     if "insufficient" in m or "余额" in m or "欠费" in m:
         return f"{msg}\n  → 账户余额不足，请前往控制台充值后重试"
     if "inventory" in m or "库存" in m or "sold out" in m:

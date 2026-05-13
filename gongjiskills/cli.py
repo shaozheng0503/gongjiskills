@@ -41,7 +41,11 @@ def _load_templates() -> dict:
         try:
             user = json.loads(path.read_text())
             if isinstance(user, dict):
-                templates.update(user)
+                for name, user_val in user.items():
+                    if name in templates and isinstance(templates[name], dict) and isinstance(user_val, dict):
+                        templates[name] = {**templates[name], **user_val}
+                    else:
+                        templates[name] = user_val
         except Exception:
             pass
     return templates
@@ -50,6 +54,7 @@ def _load_templates() -> dict:
 def _save_user_templates(user_templates: dict):
     """只保存用户自定义部分"""
     path = _templates_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(user_templates, indent=2, ensure_ascii=False))
     os.chmod(str(path), 0o600)
 
@@ -577,7 +582,21 @@ def cmd_deploy(client: GongjiClient, args):
                     print(f"  {event}")
                     last_event = event
 
-        _fail(f"等待超时 (5分钟)，请查询: gongji status {task_id}")
+        # 超时：任务已在平台创建，不能报 error 否则 Agent 会误以为任务不存在
+        if args.json:
+            out = {
+                "task_id": task_id,
+                "status": "Pending",
+                "warning": "等待超时 (5分钟)，任务已创建但未就绪",
+                "hint": f"gongji status {task_id}",
+            }
+            if ttl_pid:
+                out["auto_release_pid"] = ttl_pid
+                out["ttl_seconds"] = args.ttl
+            _json_out(out)
+        print(f"警告: 等待超时 (5分钟)，任务 {task_id} 已创建但未就绪", file=sys.stderr)
+        print(f"  查询状态: gongji status {task_id}")
+        print(f"  若不需要: gongji stop {task_id} -f")
 
     # --no-wait 模式
     if args.json:
@@ -762,7 +781,9 @@ def _stop_all(client: GongjiClient, args):
         print("当前没有运行中的任务")
         return
 
-    if not args.force and not args.json:
+    if not args.force:
+        if args.json:
+            _fail("--all 批量删除必须同时加 --force（防止误删所有任务），如: gongji stop --all --force -j")
         print(f"即将删除以下 {len(tasks)} 个任务（不可恢复）:")
         for t in tasks:
             print(f"  [{t.get('task_id')}] {t.get('task_name')}  {t.get('status')}")
@@ -800,6 +821,8 @@ def cmd_stop(client: GongjiClient, args):
     if getattr(args, "all", False):
         if args.action:
             _fail("--all 不能与 --pause/--resume 同时使用")
+        if args.task_id is not None:
+            _fail("--all 不能与 task_id 同时使用，请单独运行: gongji stop --all 或 gongji stop <task_id>")
         _stop_all(client, args)
         return
 
@@ -1060,7 +1083,7 @@ def main():
     try:
         client = GongjiClient()
     except (FileNotFoundError, KeyError, ValueError) as e:
-        _fail(f"{e}\n\n提示: 运行 python3 gongji.py init 进行初始化配置")
+        _fail(f"{e}\n\n提示: 运行 gongji init 进行初始化配置")
 
     commands = {
         "resources": cmd_resources,
