@@ -1,13 +1,38 @@
 # 共绩算力 Skills
 
-> 一份"粘给 Agent 就能跑"的 GPU 弹性部署工具。
->
-> **适用对象**：Claude Code / Cursor / OpenCode / Codex CLI / Cline / 自研 Agent —— 任何能执行 bash 的 AI Agent。
->
-> **使用方式**：把下面任意场景的"用户原话"整段复制发给你的 Agent，它会自动完成：
-> 安装 Skill → 初始化凭据 → 开 GPU → 部署服务 → 返回公网 URL → 用完自动释放。
+[![GitHub stars](https://img.shields.io/github/stars/shaozheng0503/gongjiskills?style=social)](https://github.com/shaozheng0503/gongjiskills/stargazers)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org/)
+[![Tests](https://img.shields.io/badge/tests-34%20passed-brightgreen)](./tests)
+[![Made for Claude Code](https://img.shields.io/badge/Made%20for-Claude%20Code-orange)](https://docs.anthropic.com/en/docs/claude-code)
+[![Templates](https://img.shields.io/badge/Prebuilt-47%20templates-purple)](#5-47-个预制模板完整清单)
 
-**相关文档：**
+> **粘一句话给你的 AI Agent，它自己开 GPU 跑 LLM / 出图 / 转视频，按秒计费、用完自动释放。**
+
+## 30 秒看懂
+
+**你说**：
+
+> 用 z-image 给我画一张赛博朋克东京街头，1 小时后自动关。
+
+**Agent 自动跑**：
+
+```bash
+$ gongji deploy --template z-image -n zimg --ttl 3600 --json
+{"task_id": 1926601, "status": "Running",
+ "urls": [{"url": "https://abc-8188.550c.cloud", "port": 8188}],
+ "ttl_seconds": 3600}
+```
+
+拿到 URL → 调 ComfyUI 出图 → 1 小时后任务自动停。**全程零控制台、零手动释放、按秒计费**。
+
+---
+
+**适用对象**：Claude Code / Cursor / OpenCode / Codex CLI / Cline / 自研 Agent —— 任何能执行 bash 的 AI Agent。
+
+**核心卖点**：47 个预制镜像 · 11 个分类 · CLI + Python API + Claude Code Skill · TTL 自动释放 · JSON 契约 · 智能选最便宜资源
+
+**相关文档**：
 [共绩官网](https://www.gongjiyun.com) ·
 [Open API](https://www.gongjiyun.com/docs/platform/openapi/zx3iwhbv1i8sxdkeiapcprxhn8d/) ·
 [CLI 参数](./docs/cli-reference.md) ·
