@@ -1,22 +1,30 @@
-"""共绩算力 API 客户端"""
+"""共绩算力 API 客户端 — 零第三方依赖（标准库 urllib 实现）"""
 
 from __future__ import annotations
 
 import json
 import time
+import urllib.error
+import urllib.request
 from urllib.parse import urlencode
-
-import requests
 
 from .auth import load_config, load_private_key, build_headers
 
 
 class GongjiError(Exception):
-    """共绩算力 API 错误"""
+    """共绩算力 API 错误
+
+    exit_code 属性供 CLI 语义化退出码使用：
+      2 = 网络失败 / 3 = 参数或配置错误 / 4 = 资源未找到
+    """
+
+    def __init__(self, msg: str, exit_code: int = 1):
+        super().__init__(msg)
+        self.exit_code = exit_code
 
 
 # 瞬时错误自动重试的状态码
-_RETRY_STATUS = {500, 502, 503, 504}
+_RETRY_STATUS = {429, 500, 502, 503, 504}
 
 
 def _friendly_error(msg: str) -> str:
@@ -32,13 +40,15 @@ def _friendly_error(msg: str) -> str:
         return f"{msg}\n  → 账户余额不足，请前往控制台充值后重试"
     if "inventory" in m or "库存" in m or "sold out" in m:
         return f"{msg}\n  → 库存不足，换个区域或 GPU 型号重试（gongji resources 查看库存）"
+    if "模板" in m and "不存在" in m:
+        return f"{msg}\n  → 用 gongji images 查看可用模板"
     return msg
 
 
 class GongjiClient:
-    """共绩算力 Open API 客户端（RSA签名模式）"""
+    """共绩算力 Open API 客户端（RSA签名模式，标准库实现）"""
 
-    def __init__(self, max_retries: int = 2, retry_backoff: float = 1.0):
+    def __init__(self, max_retries: int = 3, retry_backoff: float = 1.5):
         self.config = load_config()
         self.private_key = load_private_key(self.config)
         self.base_url = self.config["base_url"].rstrip("/")
@@ -46,9 +56,11 @@ class GongjiClient:
         self.retry_backoff = retry_backoff
 
     def _send(self, method: str, url: str, headers: dict, body_str: str):
-        if method == "GET":
-            return requests.get(url, headers=headers, timeout=30)
-        return requests.post(url, headers=headers, data=body_str, timeout=30)
+        data = body_str.encode("utf-8") if method != "GET" else None
+        req = urllib.request.Request(url, data=data, method=method)
+        for k, v in headers.items():
+            req.add_header(k, v)
+        return urllib.request.urlopen(req, timeout=30)
 
     def _request(self, method: str, path: str, params: dict = None, body: dict = None) -> dict:
         sign_path = path
@@ -60,34 +72,52 @@ class GongjiClient:
 
         url = f"{self.base_url}{sign_path}"
 
-        last_exc = None
+        last_exc: Exception | None = None
         for attempt in range(self.max_retries + 1):
             # 每次重试都重新签名（timestamp 需要刷新）
             headers = build_headers(sign_path, self.config, self.private_key, body=body_str)
             try:
                 resp = self._send(method, url, headers, body_str)
-                if resp.status_code in _RETRY_STATUS and attempt < self.max_retries:
-                    time.sleep(self.retry_backoff * (2 ** attempt))
+                payload = resp.read().decode("utf-8")
+                return json.loads(payload)
+            except urllib.error.HTTPError as e:
+                # 读取错误体（服务端可能返回 JSON message）
+                try:
+                    err_raw = e.read().decode("utf-8")
+                    err_data = json.loads(err_raw)
+                    msg = err_data.get("message") or err_data.get("error") or f"HTTP {e.code}"
+                except Exception:
+                    msg = f"HTTP {e.code}"
+                if e.code in _RETRY_STATUS and attempt < self.max_retries:
+                    time.sleep(self.retry_backoff * (1.5 ** attempt))
                     continue
-                resp.raise_for_status()
-                return resp.json()
-            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                if e.code == 404:
+                    raise GongjiError(f"API 返回错误: {msg}", exit_code=4)
+                raise GongjiError(f"API 返回错误: {_friendly_error(msg)}")
+            except urllib.error.URLError as e:
+                # 连接失败 / DNS / 超时
+                reason = getattr(e, "reason", e)
                 last_exc = e
                 if attempt < self.max_retries:
-                    time.sleep(self.retry_backoff * (2 ** attempt))
+                    time.sleep(self.retry_backoff * (1.5 ** attempt))
                     continue
-                if isinstance(e, requests.exceptions.Timeout):
-                    raise GongjiError("API 请求超时（已重试），请稍后再试")
-                raise GongjiError(f"无法连接到 API 服务器 ({self.base_url})，请检查网络")
-            except requests.exceptions.HTTPError as e:
-                try:
-                    err_data = e.response.json()
-                    msg = err_data.get("message") or err_data.get("error") or str(err_data)
-                except Exception:
-                    msg = f"HTTP {e.response.status_code}"
-                raise GongjiError(f"API 返回错误: {_friendly_error(msg)}")
+                raise GongjiError(
+                    f"无法连接到 API 服务器 ({self.base_url})，请检查网络: {reason}",
+                    exit_code=2,
+                )
+            except (TimeoutError, OSError) as e:
+                last_exc = e
+                if attempt < self.max_retries:
+                    time.sleep(self.retry_backoff * (1.5 ** attempt))
+                    continue
+                raise GongjiError(
+                    f"API 请求超时（已重试 {self.max_retries} 次），请稍后再试: {e}",
+                    exit_code=2,
+                )
+            except json.JSONDecodeError as e:
+                raise GongjiError(f"API 返回非 JSON 响应: {e}", exit_code=2)
         # 不应到达
-        raise GongjiError(str(last_exc) if last_exc else "未知错误")
+        raise GongjiError(str(last_exc) if last_exc else "未知错误", exit_code=2)
 
     def _get(self, path: str, params: dict = None) -> dict:
         return self._request("GET", path, params=params)

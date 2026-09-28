@@ -3,7 +3,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/shaozheng0503/gongjiskills?style=social)](https://github.com/shaozheng0503/gongjiskills/stargazers)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-34%20passed-brightgreen)](./tests)
+[![Tests](https://img.shields.io/badge/tests-44%20passed-brightgreen)](./tests)
 [![Made for Claude Code](https://img.shields.io/badge/Made%20for-Claude%20Code-orange)](https://docs.anthropic.com/en/docs/claude-code)
 [![Templates](https://img.shields.io/badge/Prebuilt-47%20templates-purple)](#5-47-个预制模板完整清单)
 
@@ -30,7 +30,7 @@ $ gongji deploy --template z-image -n zimg --ttl 3600 --json
 
 **适用对象**：Claude Code / Cursor / OpenCode / Codex CLI / Cline / 自研 Agent —— 任何能执行 bash 的 AI Agent。
 
-**核心卖点**：47 个预制镜像 · 11 个分类 · CLI + Python API + Claude Code Skill · TTL 自动释放 · JSON 契约 · 智能选最便宜资源
+**核心卖点**：47 个预制镜像 · 11 个分类 · CLI + Python API + Claude Code Skill · TTL 自动释放 · JSON 契约 · 智能选最便宜资源 · **运行时零依赖**（纯 Python 标准库，`cryptography` 可选加速）
 
 **相关文档**：
 [共绩官网](https://www.gongjiyun.com) ·

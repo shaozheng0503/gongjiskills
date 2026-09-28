@@ -13,11 +13,15 @@ from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
-from .client import GongjiClient, _friendly_error
-from .templates import BUILTIN_TEMPLATES, CATEGORIES, group_by_category
+from .client import GongjiClient, GongjiError, _friendly_error
+from .templates import BUILTIN_TEMPLATES, CATEGORIES, TEMPLATE_SOURCE, group_by_category, validate_templates
+from . import ttl as ttl_mod
 
 
 _json_mode = False
+
+# 语义化退出码：0 成功 / 1 一般错误 / 2 网络失败 / 3 参数或配置错误 / 4 资源未找到
+EXIT_OK, EXIT_ERROR, EXIT_NETWORK, EXIT_PARAM, EXIT_NOT_FOUND = 0, 1, 2, 3, 4
 
 
 def _parse_start_args(v):
@@ -92,16 +96,25 @@ def _fmt_mem(mb) -> str:
     return f"{gb:.0f}" if gb == int(gb) else f"{gb:.1f}"
 
 
-def _fail(msg: str):
+def _fail(msg: str, exit_code: int = EXIT_ERROR):
+    """统一失败出口。
+
+    exit_code 语义：
+      1 一般错误 / 2 网络失败 / 3 参数或配置错误 / 4 资源未找到
+    GongjiError 自带 exit_code 时优先使用。
+    """
     sys.stdout.flush()
+    if isinstance(msg, GongjiError):
+        exit_code = getattr(msg, "exit_code", exit_code)
+        msg = str(msg)
     friendly = _friendly_error(str(msg))
     if _json_mode:
         # JSON 模式下只输出主错误信息（不附修复提示，避免破坏结构）
         primary = friendly.split("\n")[0]
-        print(json.dumps({"error": primary}, ensure_ascii=False))
-        sys.exit(1)
+        print(json.dumps({"error": primary, "exit_code": exit_code}, ensure_ascii=False))
+        sys.exit(exit_code)
     print(f"错误: {friendly}", file=sys.stderr)
-    sys.exit(1)
+    sys.exit(exit_code)
 
 
 def _json_out(data):
@@ -162,37 +175,12 @@ def _get_fail_reason(client, task_id: int) -> str:
         return ""
 
 
-def _schedule_auto_release(task_id: int, ttl_seconds: int) -> int:
-    """在后台启动一个独立进程，ttl 到期后自动 stop_task；返回子进程 PID"""
-    log_dir = Path.home() / ".gongji" / "ttl"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / f"{task_id}.log"
+def _register_ttl(task_id: int, ttl_seconds: int, task_name: str = ""):
+    """登记 TTL 到 registry.json（惰性对账模式，替代旧的常驻 sleep 进程）。
 
-    # 子进程代码：sleep 后调用 API 释放任务
-    code = (
-        "import time, sys, json\n"
-        f"time.sleep({int(ttl_seconds)})\n"
-        "try:\n"
-        "    from gongjiskills.client import GongjiClient\n"
-        "    client = GongjiClient()\n"
-        f"    res = client.stop_task({int(task_id)})\n"
-        "    print(json.dumps(res, ensure_ascii=False))\n"
-        "except Exception as e:\n"
-        "    print(f'auto-release failed: {e}')\n"
-        "    sys.exit(1)\n"
-    )
-
-    with open(log_file, "ab") as fp:
-        proc = subprocess.Popen(
-            [sys.executable, "-c", code],
-            stdout=fp, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-
-    # 记录 pid，便于用户手动取消
-    pid_file = log_dir / f"{task_id}.pid"
-    pid_file.write_text(str(proc.pid))
-    return proc.pid
+    到期释放依赖后续任意 gongji 命令启动时的 lazy_sweep，或手动 gongji ttl sweep。
+    """
+    ttl_mod.register(task_id, ttl_seconds, task_name=task_name)
 
 
 def _get_urls(data: dict) -> list:
@@ -425,7 +413,7 @@ def cmd_deploy(client: GongjiClient, args):
     if args.template:
         templates = _load_templates()
         if args.template not in templates:
-            _fail(f"模板 [{args.template}] 不存在，用 gongji images 查看可用模板")
+            _fail(f"模板 [{args.template}] 不存在，用 gongji images 查看可用模板", exit_code=EXIT_NOT_FOUND)
         tmpl = templates[args.template]
         # 模板作为默认值，命令行参数优先
         if not args.image:
@@ -444,13 +432,13 @@ def cmd_deploy(client: GongjiClient, args):
             args.start_args = tmpl["start_args"]
 
     if not args.image:
-        _fail("缺少镜像地址，请指定 <image> 或 --template <名称>")
+        _fail("缺少镜像地址，请指定 <image> 或 --template <名称>", exit_code=EXIT_PARAM)
 
     # 1. 校验端口
     try:
         ports = [int(p) for p in args.port.split(",")]
     except ValueError:
-        _fail(f"端口格式无效: {args.port}，应为数字，多个用逗号分隔（如 8080,8443）")
+        _fail(f"端口格式无效: {args.port}，应为数字，多个用逗号分隔（如 8080,8443）", exit_code=EXIT_PARAM)
 
     # 2. 查可用资源
     if not args.json:
@@ -521,18 +509,19 @@ def cmd_deploy(client: GongjiClient, args):
     if not args.json:
         print(f"任务已创建, task_id={task_id}")
 
-    # 自动释放调度（--ttl）
-    ttl_pid = None
+    # 自动释放登记（--ttl，惰性对账模式）
+    ttl_registered = False
     if args.ttl and args.ttl > 0:
         try:
-            ttl_pid = _schedule_auto_release(task_id, args.ttl)
+            _register_ttl(task_id, args.ttl, task_name=args.name)
+            ttl_registered = True
             if not args.json:
                 mins = args.ttl / 60
-                print(f"已启用自动释放: {args.ttl}s (~{mins:.1f}分钟) 后停止 (pid={ttl_pid})")
-                print(f"  取消: kill {ttl_pid}")
+                print(f"已登记自动释放: {args.ttl}s (~{mins:.1f}分钟) 后到期")
+                print(f"  到期后任意 gongji 命令会自动补发 stop；也可手动: gongji ttl sweep")
         except Exception as e:
             if not args.json:
-                print(f"警告: 自动释放调度失败: {e}")
+                print(f"警告: TTL 登记失败: {e}")
 
     # 5. 等待就绪（显示实时事件）
     if not args.no_wait:
@@ -540,8 +529,8 @@ def cmd_deploy(client: GongjiClient, args):
             print("等待任务启动...")
         retries = 0
         last_event = ""
-        for _ in range(60):
-            time.sleep(5)
+        for _ in range(30):
+            time.sleep(10)
             try:
                 detail = client.task_detail(task_id)
                 retries = 0
@@ -558,9 +547,8 @@ def cmd_deploy(client: GongjiClient, args):
                 urls = _get_urls(data)
                 if args.json:
                     out = {"task_id": task_id, "status": "Running", "urls": urls}
-                    if ttl_pid:
+                    if ttl_registered:
                         out["ttl_seconds"] = args.ttl
-                        out["auto_release_pid"] = ttl_pid
                     _json_out(out)
                 print("Running!")
                 for u in urls:
@@ -590,8 +578,7 @@ def cmd_deploy(client: GongjiClient, args):
                 "warning": "等待超时 (5分钟)，任务已创建但未就绪",
                 "hint": f"gongji status {task_id}",
             }
-            if ttl_pid:
-                out["auto_release_pid"] = ttl_pid
+            if ttl_registered:
                 out["ttl_seconds"] = args.ttl
             _json_out(out)
         print(f"警告: 等待超时 (5分钟)，任务 {task_id} 已创建但未就绪", file=sys.stderr)
@@ -601,9 +588,8 @@ def cmd_deploy(client: GongjiClient, args):
     # --no-wait 模式
     if args.json:
         out = {"task_id": task_id, "status": "Pending"}
-        if ttl_pid:
+        if ttl_registered:
             out["ttl_seconds"] = args.ttl
-            out["auto_release_pid"] = ttl_pid
         _json_out(out)
     else:
         print(json.dumps({"task_id": task_id}, ensure_ascii=False))
@@ -851,6 +837,13 @@ def cmd_stop(client: GongjiClient, args):
     if not _ok(res):
         _fail(f"{action}失败: {res.get('message', res)}")
 
+    # 手动停掉的任务从 TTL registry 移除
+    if args.action is None:
+        try:
+            ttl_mod.unregister(args.task_id)
+        except Exception:
+            pass
+
     if args.json:
         _json_out({"task_id": args.task_id, "action": action, "ok": True})
 
@@ -914,6 +907,26 @@ def cmd_images(args):
             print(f"  {cat:<14} {label:<16} {count}")
         print(f"\n按分类筛选: gongji images --category <key>")
         print(f"一键部署:   gongji deploy --template <模板名> -n <任务名>")
+        return
+
+    # validate 子命令：校验模板数据
+    if subaction == "validate":
+        templates = _load_templates()
+        errors = validate_templates(templates)
+        result = {
+            "source": TEMPLATE_SOURCE,
+            "total": len(templates),
+            "errors": errors,
+            "ok": not errors,
+        }
+        if args.json:
+            _json_out(result)
+        if errors:
+            print(f"校验失败，{len(errors)} 个问题:")
+            for e in errors:
+                print(f"  ✗ {e}")
+            sys.exit(EXIT_PARAM)
+        print(f"校验通过: {len(templates)} 个模板（数据源: {TEMPLATE_SOURCE}）")
         return
 
     # 默认：列出所有模板（支持 --category 筛选）
@@ -981,6 +994,45 @@ def _category_counts() -> dict:
         if cat in counts:
             counts[cat] += 1
     return counts
+
+# ── ttl ──
+
+def cmd_ttl(client: GongjiClient, args):
+    """TTL 管理：list 查看登记 / sweep 立即对账 / rm 移除登记"""
+    sub = getattr(args, "subaction", None) or "list"
+
+    if sub == "rm":
+        if args.task_id is None:
+            _fail("请指定 task_id: gongji ttl rm <task_id>", exit_code=EXIT_PARAM)
+        ttl_mod.unregister(args.task_id)
+        if args.json:
+            _json_out({"task_id": args.task_id, "removed": True})
+        print(f"已移除 task {args.task_id} 的 TTL 登记")
+        return
+
+    if sub == "sweep":
+        stats = ttl_mod.sweep(client, quiet=not args.verbose)
+        if args.json:
+            _json_out(stats)
+        print(f"对账完成: 检查 {stats['checked']} 条，到期 {stats['expired']} 条，"
+              f"停止 {stats['stopped']}，已结束 {stats['ended']}，失败 {stats['failed']}")
+        if stats["failed"]:
+            print("  失败条目已保留在 registry，下次 sweep 重试")
+        return
+
+    # 默认 list
+    items = ttl_mod.list_expiring()
+    if args.json:
+        _json_out(items)
+    if not items:
+        print("当前没有 TTL 登记条目")
+        return
+    print(f"{'task_id':<12} {'剩余(秒)':<12} {'状态':<8} 任务名")
+    for it in items:
+        state = "已到期" if it["expired"] else "运行中"
+        print(f"{it['task_id']:<12} {it['expires_in']:<12.0f} {state:<8} {it['name']}")
+    print("\n手动对账: gongji ttl sweep")
+
 
 # ── main ──
 
@@ -1054,6 +1106,8 @@ def main():
     p_img_rm.add_argument("name", help="模板名称")
     p_img_cat = img_sub.add_parser("categories", help="列出所有镜像分类及其数量")
     p_img_cat.add_argument("--json", "-j", action="store_true", help="JSON格式输出")
+    p_img_val = img_sub.add_parser("validate", help="校验模板数据合法性（维护 data/templates.json 后运行）")
+    p_img_val.add_argument("--json", "-j", action="store_true", help="JSON格式输出")
 
     # stop
     p_stop = sub.add_parser("stop", help="停止/暂停/恢复任务（支持 --all 批量）")
@@ -1064,6 +1118,14 @@ def main():
     action_group.add_argument("--resume", dest="action", action="store_const", const="resume", help="恢复暂停的任务")
     p_stop.add_argument("--force", "-f", action="store_true", help="跳过确认直接删除")
     p_stop.add_argument("--json", "-j", action="store_true", help="JSON格式输出")
+
+    # ttl
+    p_ttl = sub.add_parser("ttl", help="TTL 自动释放管理（惰性对账）")
+    p_ttl.add_argument("subaction", nargs="?", default="list", choices=["list", "sweep", "rm"],
+                       help="list 查看登记（默认）/ sweep 立即对账 / rm 移除登记")
+    p_ttl.add_argument("task_id", type=int, nargs="?", default=None, help="任务ID（rm 子命令用）")
+    p_ttl.add_argument("--verbose", "-v", action="store_true", help="sweep 时逐条输出")
+    p_ttl.add_argument("--json", "-j", action="store_true", help="JSON格式输出")
 
     args = parser.parse_args()
 
@@ -1083,7 +1145,12 @@ def main():
     try:
         client = GongjiClient()
     except (FileNotFoundError, KeyError, ValueError) as e:
-        _fail(f"{e}\n\n提示: 运行 gongji init 进行初始化配置")
+        _fail(f"{e}\n\n提示: 运行 gongji init 进行初始化配置", exit_code=EXIT_PARAM)
+
+    # TTL 惰性对账：任何命令启动时，若有过期登记则静默补发 stop
+    # （ttl sweep 自己显式对账，不重复触发）
+    if args.cmd != "ttl":
+        ttl_mod.lazy_sweep(client)
 
     commands = {
         "resources": cmd_resources,
@@ -1092,12 +1159,15 @@ def main():
         "status": cmd_status,
         "logs": cmd_logs,
         "stop": cmd_stop,
+        "ttl": cmd_ttl,
     }
     try:
         commands[args.cmd](client, args)
     except KeyboardInterrupt:
         print("\n已中断")
         sys.exit(130)
+    except SystemExit:
+        raise
     except Exception as e:
         _fail(str(e))
 

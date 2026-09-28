@@ -44,8 +44,7 @@ command -v "$PY" >/dev/null && "$PY" -m pip --version >/dev/null 2>&1 \
 ok "pip 可用"
 
 command -v openssl >/dev/null 2>&1 \
-    || fail "未检测到 openssl，macOS: brew install openssl；Debian/Ubuntu: apt install openssl"
-ok "openssl $(openssl version | awk '{print $2}')"
+    || warn "未检测到 openssl（仅 gongji init 生成密钥时需要）。macOS: brew install openssl；Debian/Ubuntu: apt install openssl"
 
 # ── 2. 安装 ────────────────────────────────────────────────────────────────
 REF="${GONGJI_REF:-main}"
@@ -88,5 +87,9 @@ ${GREEN}✓ 安装完成${NC}
      或非交互：GONGJI_TOKEN=xxx gongji init --force
   2. 查看 GPU： gongji resources
   3. 帮助文档： gongji --help
+
+零依赖备用路径（pip 不可用时）：
+  git clone https://github.com/shaozheng0503/gongjiskills.git
+  python3 -m gongjiskills <命令>    # 仓库内直接运行，无需安装
 
 EOF

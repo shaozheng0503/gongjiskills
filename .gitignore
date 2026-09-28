@@ -6,3 +6,13 @@ __pycache__/
 *.pem
 .egg-info
 .github/
+# Python 打包与虚拟环境
+.venv/
+venv/
+build/
+dist/
+# 测试与工具缓存
+.pytest_cache/
+.coverage
+# TTL 注册表属于本机运行时状态，不入库
+.gongji/

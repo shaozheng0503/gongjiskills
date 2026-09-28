@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""共绩算力 CLI 入口 — 兼容直接运行 python3 gongji.py"""
+"""共绩算力 CLI 兼容入口
+
+三种运行方式等价：
+    gongji <cmd>                      # pip install 后
+    python -m gongjiskills <cmd>      # 无需安装，仓库内直接跑
+    python gongji.py <cmd>            # 兼容旧入口
+"""
 
 import sys
 import warnings

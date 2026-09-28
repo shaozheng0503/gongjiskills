@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gongjiskills"
-version = "0.1.0"
-description = "共绩算力 GPU 弹性部署 CLI / Skills，供 AI Agent 自动调用"
+version = "0.2.0"
+description = "共绩算力 GPU 弹性部署 CLI / Skills，供 AI Agent 自动调用（零必需依赖）"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "MIT"}
-dependencies = [
-    "cryptography>=3.0",
-    "requests>=2.20",
-]
+dependencies = []
+
+[project.optional-dependencies]
+crypto = ["cryptography>=3.0"]
 
 [project.scripts]
 gongji = "gongjiskills.cli:main"
@@ -23,3 +23,6 @@ Documentation = "https://www.gongjiyun.com/docs/platform/openapi/zx3iwhbv1i8sxdk
 
 [tool.setuptools.packages.find]
 include = ["gongjiskills*"]
+
+[tool.setuptools.package-data]
+gongjiskills = ["data/*.json"]
