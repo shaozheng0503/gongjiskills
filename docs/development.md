@@ -17,8 +17,8 @@ pip install -e .         # 开发模式，修改代码即时生效
 ## 运行测试
 
 ```bash
-python3 tests/test_cli.py    # 31 个 CLI 测试（内置无 pytest 的 runner）
-python3 tests/test_auth.py   # 13 个签名/解析测试
+python3 tests/test_cli.py    # 36 个 CLI 测试（内置无 pytest 的 runner）
+python3 tests/test_auth.py   # 16 个签名/解析/配置测试
 ```
 
 两个 runner 均为纯标准库实现（无 pytest 依赖），直接 `python3` 执行即可。
@@ -121,12 +121,13 @@ gongjiskills/
 ## 关键设计点
 
 - **API base URL**：`https://openapi.suanli.cn`
-- **认证**：RSA-SHA256 签名（PKCS1v15）
-- **签名串**：`path\nversion\ntimestamp\ntoken\ndata`
+- **认证双模式**：简易模式（token-only，官方推荐，`config` 只填 token）/ RSA 模式（`private_key_path` 可选字段，PKCS1v15 + SHA-256 签名 `path\nversion\ntimestamp\ntoken\ndata`）
 - **成功码**：`"0000"`（不是 `"200"`）
 - **价格单位**：微元/秒（10⁻⁶ yuan/s），转元/小时 `raw * 3600 / 1e6`
-- **退出码**：0=成功, 1=一般错误, 2=网络, 3=参数/配置, 4=资源未找到
+- **退出码**：0=成功, 1=一般错误（含本地参数校验）, 2=网络, 3=参数/配置, 4=资源未找到
 - **TTL 惰性对账**：deploy `--ttl` 写入 `~/.gongji/ttl/registry.json`；后续任意 CLI 调用启动时扫描过期条目自动停止任务，`gongji ttl list/sweep/rm` 手动管理，无常驻进程
+- **API 漂移对账**：`gongji docs check` 拉取官方仓库（suanleme/gongji-skills）端点清单对比本 CLI 实现；apifox 实时端点直链见 `gongji docs links`（构造复杂 body 时按需抓取）
+- **官方参考**：[官方 skill 仓库](https://github.com/suanleme/gongji-skills) · [共绩 Open API 文档站](https://www.gongjiyun.com/docs/platform/openapi/zx3iwhbv1i8sxdkeiapcprxhn8d/)
 
 ## 反馈 / 贡献
 

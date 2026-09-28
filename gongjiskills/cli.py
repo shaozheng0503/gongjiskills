@@ -4,10 +4,12 @@
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
 import time
+import urllib.request
 import warnings
 from pathlib import Path
 
@@ -197,55 +199,54 @@ def _get_urls(data: dict) -> list:
 # ── init ──
 
 def cmd_init(args):
-    """引导首次配置"""
+    """引导首次配置（简易模式优先，RSA 可选）"""
     gongji_dir = Path.home() / ".gongji"
     config_path = gongji_dir / "config.json"
-    key_path = gongji_dir / "private.key"
-    pub_path = gongji_dir / "public.pem"
 
     print("=== 共绩算力 CLI 初始化 ===\n")
     gongji_dir.mkdir(exist_ok=True)
     os.chmod(str(gongji_dir), 0o700)  # 仅当前用户可访问
 
-    # 1. 生成密钥
-    if key_path.exists() and not args.force:
-        print(f"私钥已存在: {key_path}（跳过，用 --force 覆盖）")
-    else:
-        print("生成 RSA 密钥对...")
-        subprocess.run(["openssl", "genrsa", "-out", str(key_path), "2048"],
-                       check=True, capture_output=True)
-        subprocess.run(["openssl", "rsa", "-pubout", "-in", str(key_path), "-out", str(pub_path)],
-                       check=True, capture_output=True)
-        os.chmod(str(key_path), 0o600)
-        os.chmod(str(pub_path), 0o644)
-        print(f"  私钥: {key_path}")
-        print(f"  公钥: {pub_path}")
+    key_path = gongji_dir / "private.key"
+    pub_path = gongji_dir / "public.pem"
 
-    # 2. 显示公钥
-    if pub_path.exists():
-        print(f"\n请将以下公钥粘贴到共绩算力控制台（API密钥 → RSA模式）：")
-        print("-" * 50)
-        print(pub_path.read_text().strip())
-        print("-" * 50)
-
-    # 3. Token（多种安全传入方式）
     if config_path.exists() and not args.force:
-        print(f"\n配置已存在: {config_path}（跳过，用 --force 覆盖）")
+        print(f"配置已存在: {config_path}（跳过，用 --force 覆盖）")
     else:
         # 优先级: --token 参数 > GONGJI_TOKEN 环境变量 > 交互输入
         token = args.token or os.environ.get("GONGJI_TOKEN")
         if not token:
-            print("\n登录 https://www.gongjiyun.com → 头像 → API密钥")
-            print("新建密钥（RSA模式），上传公钥后获取 Token\n")
+            print("登录 https://www.gongjiyun.com → 右上角头像 → API 密钥")
+            print("选择「简易模式」创建密钥即可（无需 RSA 公私钥）\n")
             token = input("请输入 API Token: ").strip()
         if not token:
             _fail("Token 不能为空")
-        config = {"token": token, "private_key_path": str(key_path)}
+
+        config = {"token": token}
+
+        # RSA 模式可选：--rsa 显式开启
+        if getattr(args, "rsa", False):
+            print("生成 RSA 密钥对...")
+            subprocess.run(["openssl", "genrsa", "-out", str(key_path), "2048"],
+                           check=True, capture_output=True)
+            subprocess.run(["openssl", "rsa", "-pubout", "-in", str(key_path), "-out", str(pub_path)],
+                           check=True, capture_output=True)
+            os.chmod(str(key_path), 0o600)
+            os.chmod(str(pub_path), 0o644)
+            config["private_key_path"] = str(key_path)
+            print(f"  私钥: {key_path}")
+            print(f"  公钥: {pub_path}")
+            print(f"\n请将以下公钥粘贴到共绩算力控制台（API密钥 → RSA模式）：")
+            print("-" * 50)
+            print(pub_path.read_text().strip())
+            print("-" * 50)
+
         config_path.write_text(json.dumps(config, indent=2, ensure_ascii=False))
         os.chmod(str(config_path), 0o600)  # 仅当前用户可读写
-        print(f"配置已写入: {config_path}")
+        mode_label = "RSA 签名模式" if "private_key_path" in config else "简易模式（token-only，官方推荐）"
+        print(f"配置已写入: {config_path}  [{mode_label}]")
 
-    # 4. 验证
+    # 验证
     print("\n验证 API 连通性...")
     try:
         client = GongjiClient()
@@ -432,13 +433,13 @@ def cmd_deploy(client: GongjiClient, args):
             args.start_args = tmpl["start_args"]
 
     if not args.image:
-        _fail("缺少镜像地址，请指定 <image> 或 --template <名称>", exit_code=EXIT_PARAM)
+        _fail("缺少镜像地址，请指定 <image> 或 --template <名称>")
 
-    # 1. 校验端口
+    # 1. 校验端口（本地参数校验 → 一般错误 1；3 保留给配置/凭据类问题）
     try:
         ports = [int(p) for p in args.port.split(",")]
     except ValueError:
-        _fail(f"端口格式无效: {args.port}，应为数字，多个用逗号分隔（如 8080,8443）", exit_code=EXIT_PARAM)
+        _fail(f"端口格式无效: {args.port}，应为数字，多个用逗号分隔（如 8080,8443）")
 
     # 2. 查可用资源
     if not args.json:
@@ -1034,6 +1035,108 @@ def cmd_ttl(client: GongjiClient, args):
     print("\n手动对账: gongji ttl sweep")
 
 
+# ── docs（API 对账，维护者工具）──
+
+# 官方权威 API 清单来源（suanleme/gongji-skills 是共绩官方仓库）
+_OFFICIAL_SKILL_RAW = (
+    "https://raw.githubusercontent.com/suanleme/gongji-skills/"
+    "master/suanli-deployment/SKILL.md"
+)
+
+# 本 CLI 已实现的端点（client.py 中的调用路径，去掉查询参数）
+_IMPLEMENTED_ENDPOINTS = {
+    "/api/deployment/resource/search",
+    "/api/task/deployment/create",
+    "/api/deployment/task/search",
+    "/api/task/deployment/detail",
+    "/api/deployment/task/pause",
+    "/api/deployment/task/recover",
+    "/api/deployment/task/stop",
+    "/api/deployment/task/update",
+    "/api/deployment/task/points",
+    "/api/deployment/task/point_log",
+    "/api/deployment/task/pod_event",
+}
+
+# apifox 实时文档直链（已验证可程序化抓取；Agent 构造复杂 body 时按需读取）
+APIFOX_LINKS = {
+    "task-create": "https://s.apifox.cn/6aa360d3-d8f2-471e-b841-3a35c33a7b7c/api-296881020.md",
+    "task-update": "https://s.apifox.cn/6aa360d3-d8f2-471e-b841-3a35c33a7b7c/api-296882076.md",
+}
+
+
+def cmd_docs(client, args):
+    """维护者工具：对比官方 API 清单与本 CLI 实现，检测 API 漂移。
+
+    数据源为官方仓库 suanleme/gongji-skills 的 SKILL.md（含权威端点速查表）。
+    网络不可达时降级提示，不阻塞其他命令。
+    """
+    sub = getattr(args, "subaction", None) or "check"
+
+    if sub == "links":
+        result = {
+            "official_repo": "https://github.com/suanleme/gongji-skills",
+            "official_doc_site": "https://www.gongjiyun.com/docs/platform/openapi/zx3iwhbv1i8sxdkeiapcprxhn8d/",
+            "apifox_direct": APIFOX_LINKS,
+        }
+        if args.json:
+            _json_out(result)
+        print("官方文档入口：")
+        print(f"  官方 skill 仓库: {result['official_repo']}")
+        print(f"  官方文档站:      {result['official_doc_site']}")
+        print("\napifox 实时端点文档（构造复杂 body 时按需抓取）：")
+        for name, url in APIFOX_LINKS.items():
+            print(f"  {name}: {url}")
+        return
+
+    # 默认 check：拉官方 SKILL.md，提取全部端点（速查表 + 工作流正文），对比本地实现
+    if not args.json:
+        print("拉取官方 API 清单 (suanleme/gongji-skills)...")
+    official_endpoints = None
+    try:
+        req = urllib.request.Request(_OFFICIAL_SKILL_RAW, headers={"User-Agent": "gongji-cli"})
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            content = resp.read().decode("utf-8")
+        # 官方 SKILL.md 全文的端点引用（速查表 + 工作流小节）
+        official_endpoints = set()
+        for m in re.finditer(r"/(?:task|deployment|billing|storage)/[a-z0-9_/]+", content):
+            official_endpoints.add("/api" + m.group(0))
+    except Exception as e:
+        if args.json:
+            _json_out({"error": f"无法拉取官方清单: {e}", "exit_code": 2})
+        print(f"无法拉取官方清单（网络问题，降级跳过对账）: {e}")
+        print(f"  → 手工查看: {_OFFICIAL_SKILL_RAW}")
+        sys.exit(2)
+
+    missing = sorted(official_endpoints - _IMPLEMENTED_ENDPOINTS)
+    extra = sorted(_IMPLEMENTED_ENDPOINTS - official_endpoints)
+
+    result = {
+        "source": _OFFICIAL_SKILL_RAW,
+        "official_count": len(official_endpoints),
+        "implemented_count": len(_IMPLEMENTED_ENDPOINTS),
+        "not_implemented": missing,   # 官方有、本 CLI 未实现
+        "not_in_official": extra,     # 本 CLI 有、官方速查表没有（可能已改名/下线）
+        "up_to_date": not missing and not extra,
+    }
+    if args.json:
+        _json_out(result)
+
+    print(f"官方端点 {result['official_count']} 个，本 CLI 实现 {result['implemented_count']} 个")
+    if missing:
+        print(f"\n官方有但本 CLI 未实现 ({len(missing)}):")
+        for p in missing:
+            print(f"  - {p}")
+    if extra:
+        print(f"\n本 CLI 有但官方速查表未列 ({len(extra)})（确认是否改名/下线）:")
+        for p in extra:
+            print(f"  - {p}")
+    if result["up_to_date"]:
+        print("✓ 与官方清单一致，无漂移")
+    else:
+        print("\n提示: 端点差异不一定是 bug——按需实现即可；用 gongji docs links 查看实时文档入口")
+
+
 # ── main ──
 
 def main():
@@ -1044,9 +1147,10 @@ def main():
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     # init
-    p_init = sub.add_parser("init", help="初始化配置（生成密钥、写入Token）")
+    p_init = sub.add_parser("init", help="初始化配置（简易模式只需 Token）")
     p_init.add_argument("--force", "-f", action="store_true", help="覆盖已有配置")
     p_init.add_argument("--token", "-t", default=None, help="直接传入Token（非交互模式，供Agent调用）")
+    p_init.add_argument("--rsa", action="store_true", help="使用 RSA 签名模式（生成密钥对，需要 openssl；默认简易模式无需密钥）")
 
     # resources
     p_res = sub.add_parser("resources", help="查看可用 GPU 资源和价格")
@@ -1127,6 +1231,12 @@ def main():
     p_ttl.add_argument("--verbose", "-v", action="store_true", help="sweep 时逐条输出")
     p_ttl.add_argument("--json", "-j", action="store_true", help="JSON格式输出")
 
+    # docs（维护者工具，无需 API 凭据）
+    p_docs = sub.add_parser("docs", help="API 文档对账（对比官方清单，维护者工具）")
+    p_docs.add_argument("subaction", nargs="?", default="check", choices=["check", "links"],
+                        help="check 拉官方清单对比端点（默认）/ links 列出官方文档入口")
+    p_docs.add_argument("--json", "-j", action="store_true", help="JSON格式输出")
+
     args = parser.parse_args()
 
     # 设置全局 JSON 模式，让 _fail 也输出 JSON
@@ -1137,9 +1247,12 @@ def main():
         cmd_init(args)
         return
 
-    # images 命令不需要 API 凭据
+    # images / docs 命令不需要 API 凭据
     if args.cmd == "images":
         cmd_images(args)
+        return
+    if args.cmd == "docs":
+        cmd_docs(None, args)
         return
 
     try:

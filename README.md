@@ -30,7 +30,7 @@ $ gongji deploy --template z-image -n zimg --ttl 3600 --json
 
 **适用对象**：Claude Code / Cursor / OpenCode / Codex CLI / Cline / 自研 Agent —— 任何能执行 bash 的 AI Agent。
 
-**核心卖点**：47 个预制镜像 · 11 个分类 · CLI + Python API + Claude Code Skill · TTL 自动释放 · JSON 契约 · 智能选最便宜资源 · **运行时零依赖**（纯 Python 标准库，`cryptography` 可选加速）
+**核心卖点**：47 个预制镜像 · 11 个分类 · CLI + Python API + Claude Code Skill · TTL 自动释放 · JSON 契约 · 智能选最便宜资源 · **运行时零依赖**（纯 Python 标准库，`cryptography` 可选加速）· **简易模式 token-only**（官方推荐，无需 RSA 密钥）
 
 **相关文档**：
 [共绩官网](https://www.gongjiyun.com) ·
@@ -76,7 +76,7 @@ $ gongji deploy --template z-image -n zimg --ttl 3600 --json
 你只需要做两件事：
 
 1. 在 [共绩算力官网](https://www.gongjiyun.com) 注册账号并充值 ¥10–20（足够体验所有场景）。
-2. 打开：头像 → API 密钥 → **RSA 模式** → 新建，拿到一串 token。
+2. 打开：头像 → API 密钥 → **简易模式**（推荐，无需 RSA 密钥）→ 新建，拿到一串 token。
 
 把 token 先留着，后面让 Agent 用它初始化。
 
@@ -100,7 +100,7 @@ $ gongji deploy --template z-image -n zimg --ttl 3600 --json
 4. 之后所有涉及 GPU / LLM / 生图 / 视频 / 语音 的请求都用 `gongji` CLI 完成，
    并且务必加 `--ttl 3600` 避免忘记释放烧钱。
 
-我的 token 是：<把你的 RSA token 粘在这里>
+我的 token 是：<把你的 token 粘在这里>
 ```
 
 **Agent 实际会跑的命令：**

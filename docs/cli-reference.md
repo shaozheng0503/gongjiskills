@@ -14,30 +14,47 @@
 ## `init` — 初始化配置
 
 ```bash
-gongji init                              # 交互模式
+gongji init                              # 交互模式（默认简易模式）
 gongji init --force                      # 覆盖已有配置
 GONGJI_TOKEN=xxx gongji init --force     # 非交互（Agent / CI）
 gongji init --token xxx --force          # 命令行参数（会进 shell history）
+gongji init --rsa                        # RSA 签名模式（生成密钥对，需 openssl）
 ```
 
 `init` 会依次完成：
 
-1. 生成 RSA 密钥对（`~/.gongji/private.key` + `public.pem`），私钥权限自动设为 `600`
-2. 显示公钥 → 复制到 [控制台](https://www.gongjiyun.com) 头像 → API密钥 → RSA 模式
-3. 输入 API Token
-4. 验证连通性（查一次 GPU 资源）
+1. 获取 Token（优先级：`--token` 参数 > `GONGJI_TOKEN` 环境变量 > 交互输入）
+2. 写入 `~/.gongji/config.json` 并验证连通性（查一次 GPU 资源）
+
+**两种认证模式：**
+
+| 模式 | 配置 | 说明 |
+|------|------|------|
+| **简易模式**（默认，官方推荐） | `{"token": "xxx"}` | 无需 RSA 密钥，请求头只带 token |
+| RSA 模式（`--rsa` 开启） | `{"token": "xxx", "private_key_path": "~/.gongji/private.key"}` | 生成密钥对，需把 `public.pem` 上传控制台；请求带 `sign_str` 签名 |
 
 **初始化目录结构：**
 
 ```
 ~/.gongji/
-├── config.json       # 600 - 包含 token 和密钥路径
-├── private.key       # 600 - RSA 私钥
-├── public.pem        # 644 - RSA 公钥（供上传控制台）
-└── ttl/              # TTL 守护进程的日志 / PID 目录
-    ├── <task_id>.log
-    └── <task_id>.pid
+├── config.json       # 600 - token（+ RSA 模式时的密钥路径）
+├── private.key       # 600 - RSA 私钥（仅 --rsa 模式）
+├── public.pem        # 644 - RSA 公钥（仅 --rsa 模式，供上传控制台）
+└── ttl/              # TTL 惰性对账登记
+    └── registry.json
 ```
+
+---
+
+## `docs` — API 文档对账（维护者工具）
+
+```bash
+gongji docs check          # 拉取官方 suanleme/gongji-skills 端点清单，对比本 CLI 实现
+gongji docs links          # 列出官方文档入口 + apifox 实时端点直链
+gongji docs check --json   # JSON 输出
+```
+
+`docs check` 用于检测 API 漂移：官方新增端点 / 端点改名时能第一时间发现。无需 API 凭据；网络失败时降级提示（exit 2），不阻塞。
 
 ---
 

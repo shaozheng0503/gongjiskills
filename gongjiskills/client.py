@@ -46,11 +46,16 @@ def _friendly_error(msg: str) -> str:
 
 
 class GongjiClient:
-    """共绩算力 Open API 客户端（RSA签名模式，标准库实现）"""
+    """共绩算力 Open API 客户端（标准库实现）
+
+    认证双模式：
+    - 简易模式（推荐）：config 只填 token，请求头不带 sign_str
+    - RSA 模式：config 加 private_key_path，请求头带 RSA-SHA256 sign_str
+    """
 
     def __init__(self, max_retries: int = 3, retry_backoff: float = 1.5):
         self.config = load_config()
-        self.private_key = load_private_key(self.config)
+        self.private_key = load_private_key(self.config)  # 简易模式返回 None
         self.base_url = self.config["base_url"].rstrip("/")
         self.max_retries = max_retries
         self.retry_backoff = retry_backoff

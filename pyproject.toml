@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gongjiskills"
-version = "0.2.0"
+version = "0.2.1"
 description = "共绩算力 GPU 弹性部署 CLI / Skills，供 AI Agent 自动调用（零必需依赖）"
 readme = "README.md"
 requires-python = ">=3.8"

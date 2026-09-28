@@ -17,7 +17,7 @@ description: >-
 
 | 命令 | 一句话 |
 |------|--------|
-| `gongji init` | 初始化（`GONGJI_TOKEN=xxx gongji init --force` 非交互） |
+| `gongji init` | 初始化（`GONGJI_TOKEN=xxx gongji init --force` 非交互，默认**简易模式**无需密钥；`--rsa` 可选） |
 | `gongji resources --json` | 查 GPU 库存价格（`-g 4090 -r 广东` 筛选） |
 | `gongji images categories --json` | 看分类大纲 ★ Agent 先看这个 |
 | `gongji images --category <k> --json` | 看分类下模板 |
@@ -29,6 +29,7 @@ description: >-
 | `gongji stop <id> -f --json` | 释放单个 |
 | `gongji stop --all -f --json` | 批量释放 |
 | `gongji ttl list` / `sweep` / `rm <id>` | TTL 登记管理 / 立即对账 / 移除登记 |
+| `gongji docs check` / `links` | 维护者：API 漂移对账 / 官方文档入口 |
 
 完整参数（deploy 全字段、images add 等）见 [docs/cli-reference.md](../docs/cli-reference.md)，**仅在构造复杂命令时读取，勿整篇加载**。
 
@@ -60,6 +61,8 @@ JSON 错误格式：`{"error": "...", "exit_code": N}`。
 
 **模板库关键约束**：所有镜像来自平台 registry `harbor.suanleme.cn`（内网预缓存）。**不要编造 docker hub / ghcr.io 上游地址**，平台拉不到。模板数据在 `gongjiskills/data/templates.json`，平台暂无公开清单 API，人工维护后跑 `gongji images validate`。
 
+**官方实时文档（按需抓取，勿预加载）**：字段拿不准时抓 apifox 端点直链——[任务创建](https://s.apifox.cn/6aa360d3-d8f2-471e-b841-3a35c33a7b7c/api-296881020.md) · [任务修改](https://s.apifox.cn/6aa360d3-d8f2-471e-b841-3a35c33a7b7c/api-296882076.md)；完整目录见[共绩 Open API 文档站](https://www.gongjiyun.com/docs/platform/openapi/zx3iwhbv1i8sxdkeiapcprxhn8d/)。维护者可用 `gongji docs check` 做端点漂移对账。
+
 ## deploy 关键点
 
 1. **必须 `--json`**；成功返回 `{"task_id", "status", "urls": [{"url", "port"}]}`
@@ -70,7 +73,7 @@ JSON 错误格式：`{"error": "...", "exit_code": N}`。
 
 ## 对话执行约定
 
-1. 缺 token / 配置不存在时，引导用户去 https://www.gongjiyun.com → 头像 → API 密钥（RSA 模式）获取，勿猜测、勿编造。
+1. 缺 token / 配置不存在时，引导用户去 https://www.gongjiyun.com → 头像 → API 密钥（**简易模式**即可，无需 RSA 公私钥），勿猜测、勿编造。
 2. deploy 前确认：模板名、任务名、TTL；大模型（27B+/多卡）确认用户接受价格。
 3. 创建成功后回报 `task_id` + 访问 URL，询问是否轮询就绪。
 4. **删除/批量删除前必须二次确认**；`stop --all` 强制要求 `--force`。

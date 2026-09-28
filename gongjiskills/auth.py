@@ -116,26 +116,35 @@ class _PureRSAPrivateKey:
 
 
 def load_config() -> dict:
-    """加载 ~/.gongji/config.json 配置"""
+    """加载 ~/.gongji/config.json 配置
+
+    两种模式：
+    - 简易模式（推荐）：只填 token，无需 RSA 签名
+      {"token": "your-token"}
+    - RSA 模式：token + private_key_path（平台校验 sign_str）
+      {"token": "your-token", "private_key_path": "~/.gongji/private.key"}
+    """
     config_path = Path.home() / ".gongji" / "config.json"
     if not config_path.exists():
         raise FileNotFoundError(
             f"配置文件不存在: {config_path}\n"
-            "请先创建配置文件，格式:\n"
-            '{"token": "your-token", "private_key_path": "~/.gongji/private.key"}'
+            "请先运行 gongji init，或手工创建配置文件，格式:\n"
+            '{"token": "your-token"}  # 简易模式（推荐）\n'
+            '{"token": "your-token", "private_key_path": "~/.gongji/private.key"}  # RSA 模式'
         )
-    # 检查文件权限，过于宽松时警告
-    try:
-        mode = config_path.stat().st_mode & 0o777
-        if mode & 0o077:  # 其他用户/组可读
-            import sys
-            print(
-                f"警告: {config_path} 权限过宽 ({oct(mode)})，"
-                f"建议运行: chmod 600 {config_path}",
-                file=sys.stderr,
-            )
-    except OSError:
-        pass
+    # 检查文件权限，过于宽松时警告（Windows 无 POSIX 权限位，跳过）
+    if os.name != "nt":
+        try:
+            mode = config_path.stat().st_mode & 0o777
+            if mode & 0o077:  # 其他用户/组可读
+                import sys
+                print(
+                    f"警告: {config_path} 权限过宽 ({oct(mode)})，"
+                    f"建议运行: chmod 600 {config_path}",
+                    file=sys.stderr,
+                )
+        except OSError:
+            pass
     try:
         with open(config_path) as f:
             config = json.load(f)
@@ -143,32 +152,38 @@ def load_config() -> dict:
         raise ValueError(
             f"配置文件格式错误: {config_path}\n"
             "请检查 JSON 格式是否正确，示例:\n"
-            '{"token": "your-token", "private_key_path": "~/.gongji/private.key"}'
+            '{"token": "your-token"}'
         )
-    for key in ("token", "private_key_path"):
-        if key not in config:
-            raise KeyError(f"配置缺少必填字段: {key}")
+    if "token" not in config:
+        raise KeyError("配置缺少必填字段: token")
     config.setdefault("base_url", "https://openapi.suanli.cn")
     config.setdefault("version", "1.0.0")
     return config
 
 
 def load_private_key(config: dict):
-    """加载RSA私钥"""
-    key_path = Path(os.path.expanduser(config["private_key_path"]))
+    """加载RSA私钥（可选）。简易模式下无 private_key_path 字段时返回 None。"""
+    key_path_raw = config.get("private_key_path")
+    if not key_path_raw:
+        return None  # 简易模式：无需私钥
+    key_path = Path(os.path.expanduser(key_path_raw))
     if not key_path.exists():
-        raise FileNotFoundError(f"私钥文件不存在: {key_path}")
-    try:
-        mode = key_path.stat().st_mode & 0o777
-        if mode & 0o077:
-            import sys
-            print(
-                f"警告: 私钥 {key_path} 权限过宽 ({oct(mode)})，"
-                f"建议运行: chmod 600 {key_path}",
-                file=sys.stderr,
-            )
-    except OSError:
-        pass
+        raise FileNotFoundError(
+            f"私钥文件不存在: {key_path}\n"
+            "  → 若不需要 RSA 签名，请从配置中删除 private_key_path 字段（简易模式）"
+        )
+    if os.name != "nt":
+        try:
+            mode = key_path.stat().st_mode & 0o777
+            if mode & 0o077:
+                import sys
+                print(
+                    f"警告: 私钥 {key_path} 权限过宽 ({oct(mode)})，"
+                    f"建议运行: chmod 600 {key_path}",
+                    file=sys.stderr,
+                )
+        except OSError:
+            pass
     with open(key_path, "rb") as f:
         key_data = f.read()
     if _HAS_CRYPTOGRAPHY:
@@ -217,20 +232,25 @@ def build_headers(
     private_key,
     body: str = "{}",
 ) -> dict:
-    """构建带签名的请求头"""
+    """构建请求头。
+
+    - RSA 模式（config 含 private_key_path 且私钥加载成功）：带 sign_str
+    - 简易模式（private_key 为 None）：仅 token/timestamp/version，官方推荐
+    """
     timestamp = int(time.time() * 1000)
-    sign_str = sign_request(
-        path=path,
-        version=config["version"],
-        timestamp=timestamp,
-        token=config["token"],
-        body=body,
-        private_key=private_key,
-    )
-    return {
+    headers = {
         "token": config["token"],
         "timestamp": str(timestamp),
         "version": config["version"],
-        "sign_str": sign_str,
-        "Content-Type": "application/json",
     }
+    if private_key is not None:
+        headers["sign_str"] = sign_request(
+            path=path,
+            version=config["version"],
+            timestamp=timestamp,
+            token=config["token"],
+            body=body,
+            private_key=private_key,
+        )
+    headers["Content-Type"] = "application/json"
+    return headers

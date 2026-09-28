@@ -211,11 +211,11 @@ def test_load_config_bad_json():
 
 
 def test_load_config_missing_field():
-    """缺少必填字段时抛 KeyError"""
+    """缺少 token 时抛 KeyError（简易模式只需 token）"""
     tmpdir = Path(tempfile.mkdtemp())
     gongji_dir = tmpdir / ".gongji"
     gongji_dir.mkdir()
-    (gongji_dir / "config.json").write_text('{"token": "x"}')
+    (gongji_dir / "config.json").write_text('{"private_key_path": "/tmp/x.key"}')
 
     import gongjiskills.auth as auth
     original = Path.home
@@ -228,6 +228,45 @@ def test_load_config_missing_field():
             pass
     finally:
         Path.home = original
+
+
+def test_load_config_simple_mode():
+    """简易模式：只填 token 即可，无需 private_key_path"""
+    tmpdir = Path(tempfile.mkdtemp())
+    gongji_dir = tmpdir / ".gongji"
+    gongji_dir.mkdir()
+    (gongji_dir / "config.json").write_text('{"token": "x"}')
+
+    import gongjiskills.auth as auth
+    original = Path.home
+    Path.home = staticmethod(lambda: tmpdir)
+    try:
+        config = load_config()
+        assert config["token"] == "x"
+        assert "private_key_path" not in config
+        assert config["base_url"] == "https://openapi.suanli.cn"
+        # 简易模式：无私钥字段 → load_private_key 返回 None
+        assert load_private_key(config) is None
+        # 简易模式 headers：无 sign_str
+        headers = build_headers("/api/test", config, None, body="{}")
+        assert "sign_str" not in headers
+        assert set(headers.keys()) == {"token", "timestamp", "version", "Content-Type"}
+    finally:
+        Path.home = original
+
+
+def test_load_private_key_missing_file_hint():
+    """RSA 模式配了 private_key_path 但文件不存在 → 报错并提示可回退简易模式"""
+    tmpdir = Path(tempfile.mkdtemp())
+    config = {"token": "x", "private_key_path": str(tmpdir / "nope.key")}
+    try:
+        try:
+            load_private_key(config)
+            assert False, "应该抛异常"
+        except FileNotFoundError as e:
+            assert "简易模式" in str(e)
+    finally:
+        pass
 
 
 def test_load_private_key():

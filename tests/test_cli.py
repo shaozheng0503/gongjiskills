@@ -286,6 +286,30 @@ def test_images_command_shows_builtin():
     assert "大语言模型推理" in out or "llm" in out
 
 
+def test_docs_links_no_creds():
+    """gongji docs links 无需配置文件即可列出官方文档入口"""
+    out, _, rc = run(["docs", "links"])
+    assert rc == 0
+    assert "apifox.cn" in out
+    assert "gongji-skills" in out
+
+
+def test_docs_links_json():
+    out, _, rc = run(["docs", "links", "--json"])
+    assert rc == 0
+    data = json.loads(out)
+    assert "apifox_direct" in data
+    assert "official_repo" in data
+
+
+def test_init_help_mentions_rsa_option():
+    """init 帮助应说明默认简易模式、--rsa 可选"""
+    out, _, rc = run(["init", "--help"])
+    assert rc == 0
+    assert "--rsa" in out
+    assert "简易模式" in out
+
+
 def test_images_json_is_valid():
     out, _, rc = run(["images", "--json"])
     assert rc == 0

@@ -2,6 +2,29 @@
 
 本文件记录 gongjiskills 的版本变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
+## [0.2.1] — 2026-09-28
+
+对照官方 suanleme/gongji-skills 仓库研究后的三项增强。
+
+### 新增
+
+- **简易模式（token-only）**：`gongji init` 默认简易模式，config 只填 `token` 即可用全部命令（官方推荐，无需 RSA 签名）；`init --rsa` 显式开启 RSA 签名模式。`build_headers` 无私钥时不发送 `sign_str`。
+- **`gongji docs` 维护者命令**：
+  - `docs check` — 拉取官方仓库（suanleme/gongji-skills）的权威端点清单，与本 CLI 实现对比，报告 API 漂移；网络失败降级提示（exit 2）。
+  - `docs links` — 列出官方文档入口与 apifox 实时端点直链。
+- **apifox 活链接**：SKILL.md 嵌入已验证可抓取的 apifox 端点直链（任务创建/修改）+ 官方文档站 URL，Agent 构造复杂 body 时按需实时读取最新规范（渐进披露最深层）。
+
+### 变更
+
+- 退出码语义微调：本地参数校验（如端口格式）统一为 1（一般错误），3 保留给配置/凭据缺失。
+- Windows 兼容：`~/.gongji/config.json` 与私钥的 POSIX 权限检查在 Windows（`os.name == "nt"`）下跳过，消除 NTFS 下的误报警告。
+
+### 实测
+
+- 简易模式端到端：init → resources（68 种 GPU）→ list → docs check 全部通过。
+- 对账发现官方有但本 CLI 未实现的端点：计费查询 ×2、`change_points`、`delete_pod`、对象存储 ×2（按需实现，非 bug）。
+- 测试 44 → 49（新增简易模式配置加载、headers 无 sign_str、docs links、init --rsa 帮助等）。
+
 ## [0.2.0] — 2026-09-28
 
 按 Agent Skills 设计规范（渐进披露 / 自包含分发 / 数据与逻辑分离 / 降级路径 / 语义化退出码 / clean-room 验证）全量改造。
