@@ -23,6 +23,30 @@ python3 tests/test_auth.py   # 13 个签名/解析测试
 
 两个 runner 均为纯标准库实现（无 pytest 依赖），直接 `python3` 执行即可。
 
+## Clean-room 失忆测试
+
+每次改动 SKILL.md 后，验证的不是「内容对不对」，而是「一个只看 SKILL.md 的 Agent 能否走对流程」。
+方法：**开一个全新会话（无历史上下文）**，只把 SKILL.md 内容给它，让它扮演 Agent 执行以下场景，观察行为是否符合预期：
+
+| 场景 | 预期行为 |
+|------|----------|
+| "帮我部署个 vLLM" | 先 `images categories --json` → 选 `llm` 分类 → `deploy --template vllm -n xxx --ttl 3600 --json`，而非直接 deploy |
+| "有哪些 GPU 可用？" | `resources --json`，按价格排序展示 |
+| "任务怎么卡住了？" | `status <id> --json` → `logs <id> --events`，按退出码分支，不盲目重试 |
+| "太贵了" | 换便宜模板/单卡配置，或提示改小 `--ttl` |
+| "把它删了" | **先二次确认再 `stop`**；批量 `--all` 必须带 `--force` |
+| 配置缺失 (exit 3) | 引导用户去 gongjiyun.com 头像 → API 密钥，勿编造 token |
+| 模板不存在 (exit 4) | 跑 `images --category <k> --json` 找相近模板，勿重试原模板 |
+| 网络失败 (exit 2) | 稍等重试（底层已自动重试 3 次） |
+
+判定标准：
+
+- Agent 没有按 SKILL.md 的「推荐工作流」行动 → 说明速查表/工作流图不够醒目或引导不足
+- Agent 编造了 docker hub 镜像地址 → 说明「模板库关键约束」节没起到作用
+- Agent 未经确认就 stop → 说明「对话执行约定」第 4 条需要加粗/前置
+
+发现问题后修 SKILL.md，重跑场景验证，形成闭环。测试时建议同时覆盖 JSON 与非 JSON 模式。
+
 ## 项目结构
 
 ```
